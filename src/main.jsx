@@ -1,83 +1,180 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BIBLE_ROUNDS, HOLIDAY_ROUNDS, FAST_MONEY, WHO_SAID_IT, TRIVIA, WHICH_FIRST } from "./data";
+import { CHALLENGE_BANK, FAST_MONEY_BANK, SURVEY_BANK, shuffle } from "./data";
 import "./style.css";
 
-const MODES = [
-  ["bible","Bible Survey Showdown","10 Scripture-rooted answer boards","✦"],
-  ["holiday","Holiday Hilarity","8 laugh-out-loud family survey rounds","☃"],
-  ["fast","Fast Money","5 rapid-fire questions. Race to 200.","⚡"],
-  ["said","Who Said It?","Match the paraphrased line to the speaker","❝"],
-  ["trivia","Nativity Trivia","Details, surprises, and tradition traps","?"],
-  ["first","Which Came First?","Put the Christmas story in order","⇄"]
+const DIFFICULTIES = {
+  Easy: { seconds: 30, strikes: 3, hint: "One host hint" },
+  Classic: { seconds: 25, strikes: 3, hint: "No hints" },
+  Expert: { seconds: 15, strikes: 2, hint: "Scripture reference only" }
+};
+const defaultTeams = [
+  { name: "Team Bethlehem", players: ["Player 1","Player 2","Player 3","Player 4","Player 5"] },
+  { name: "Team Nazareth", players: ["Player 1","Player 2","Player 3","Player 4","Player 5"] }
 ];
 
-const freshScores = names => ({scores:[0,0],names,active:0});
+function useStored(key, initial) {
+  const [value, setValue] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(key)) ?? initial; } catch { return initial; }
+  });
+  useEffect(() => localStorage.setItem(key, JSON.stringify(value)), [key, value]);
+  return [value, setValue];
+}
 
-function useFeedback(sound) {
-  const audio = useRef(null);
+function useSound(enabled) {
+  const ctxRef = useRef(null);
   return type => {
-    if (navigator.vibrate) navigator.vibrate(type === "wrong" ? [110,60,110] : 45);
-    if (!sound) return;
-    const Ctx = window.AudioContext || window.webkitAudioContext; audio.current ||= new Ctx();
-    const ctx=audio.current, osc=ctx.createOscillator(), gain=ctx.createGain();
-    osc.type=type==="wrong"?"sawtooth":"sine"; osc.frequency.setValueAtTime(type==="wrong"?145:520,ctx.currentTime);
-    if(type!=="wrong") osc.frequency.exponentialRampToValueAtTime(880,ctx.currentTime+.15);
-    gain.gain.setValueAtTime(.15,ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.25);
-    osc.connect(gain).connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime+.26);
+    if (navigator.vibrate) navigator.vibrate(type === "wrong" ? [90,50,90] : type === "buzz" ? 70 : 35);
+    if (!enabled) return;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    ctxRef.current ||= new AudioCtx();
+    const ctx = ctxRef.current, osc = ctx.createOscillator(), gain = ctx.createGain();
+    const tones = { wrong: [120,85], buzz: [240,420], right: [520,900], win: [440,1040] };
+    const [start,end] = tones[type] || tones.right;
+    osc.type = type === "wrong" ? "sawtooth" : "sine";
+    osc.frequency.setValueAtTime(start, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(end, ctx.currentTime + .22);
+    gain.gain.setValueAtTime(.16, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .3);
+    osc.connect(gain).connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .31);
   };
 }
 
-function ScoreRow({team,setTeam}) {
-  return <section className="score-row">{[0,1].map(i=><article className={`team ${team.active===i?"active":""}`} key={i} onClick={()=>setTeam(t=>({...t,active:i}))}>
-    <div><span>TEAM {i+1}</span><h2>{team.names[i]}</h2></div><strong>{team.scores[i]}</strong>
+function Header({ title, sub, onHome, sound, setSound }) {
+  return <header className="app-header">
+    <button className="icon-btn" onClick={onHome} aria-label="Home">←</button>
+    <div><span className="eyebrow">CHRISTMAS SURVEY SHOWDOWN</span><h1>{title}</h1></div>
+    <span className="header-sub">{sub}</span>
+    <button className="icon-btn" onClick={() => setSound(v => !v)} aria-label="Toggle sound">{sound ? "♪" : "×♪"}</button>
+  </header>;
+}
+
+function TeamSetup({ teams, setTeams }) {
+  const update = (team, field, value, player) => setTeams(old => old.map((t,i) => i !== team ? t : player === undefined ? {...t,[field]:value} : {...t,players:t.players.map((p,j)=>j===player?value:p)}));
+  return <div className="team-setup">{teams.map((team, ti) => <section className={`setup-team team-${ti}`} key={ti}>
+    <label>Team {ti + 1}<input value={team.name} onChange={e=>update(ti,"name",e.target.value)} /></label>
+    <div className="player-grid">{team.players.map((p,pi)=><label key={pi}><span>{pi===0?"Captain":`Player ${pi+1}`}</span><input value={p} onChange={e=>update(ti,"players",e.target.value,pi)} /></label>)}</div>
+  </section>)}</div>;
+}
+
+function Welcome({ teams, setTeams, onStart, sound, setSound }) {
+  return <main className="welcome-screen">
+    <div className="aurora"/><section className="hero-card">
+      <span className="eyebrow">THE COMPLETE HOLIDAY PARTY GAME</span>
+      <h1>Christmas Bible<br/><b>Survey Showdown</b></h1>
+      <p>Scripture, Santa, traditions, hilarious surveys, buzzers, strikes, steals and Fast Money.</p>
+      <TeamSetup {...{teams,setTeams}} />
+      <button className="primary jumbo" onClick={onStart}>Enter game lobby</button>
+      <button className="sound-link" onClick={()=>setSound(v=>!v)}>Sound effects: {sound?"On":"Off"}</button>
+      <small>Original holiday entertainment game. Gameplay point values are not scientific survey results.</small>
+    </section>
+  </main>;
+}
+
+function Lobby({ settings, setSettings, onPlay, onChallenges, onFast, onHow, onRewards, onBack, teams }) {
+  const set = (k,v) => setSettings(s=>({...s,[k]:v}));
+  return <main className="lobby">
+    <header className="lobby-head"><button className="icon-btn" onClick={onBack}>←</button><div><span className="eyebrow">GAME LOBBY</span><h1>Ready for the lights?</h1></div><div className="team-pill">{teams[0].name} <b>VS</b> {teams[1].name}</div></header>
+    <section className="settings-card">
+      <label>Difficulty<select value={settings.difficulty} onChange={e=>set("difficulty",e.target.value)}>{Object.keys(DIFFICULTIES).map(x=><option key={x}>{x}</option>)}</select><small>{DIFFICULTIES[settings.difficulty].seconds}s • {DIFFICULTIES[settings.difficulty].strikes} strikes • {DIFFICULTIES[settings.difficulty].hint}</small></label>
+      <label>Question mix<select value={settings.mix} onChange={e=>set("mix",e.target.value)}><option>Mixed</option><option>Bible</option><option>Holiday</option></select><small>Every new game shuffles a fresh deck.</small></label>
+      <label>Rounds<select value={settings.rounds} onChange={e=>set("rounds",Number(e.target.value))}><option value="6">6 rounds</option><option value="8">8 rounds</option><option value="12">12 rounds</option></select><small>Single, double, then triple points.</small></label>
+    </section>
+    <section className="mode-cards">
+      <button className="feature-card main-mode" onClick={onPlay}><i>★</i><div><h2>New Showdown</h2><p>Fresh shuffled boards • face-offs • play/pass • strikes • steals</p></div><b>PLAY →</b></button>
+      <button className="feature-card" onClick={onChallenges}><i>?</i><div><h2>Challenge Arcade</h2><p>Prophecy, trivia, Who Said It? and timeline</p></div></button>
+      <button className="feature-card" onClick={onFast}><i>⚡</i><div><h2>Fast Money</h2><p>Two players, five shuffled questions, 200-point target</p></div></button>
+      <button className="feature-card" onClick={onRewards}><i>♛</i><div><h2>Rewards & Scores</h2><p>Wins, stars, streaks and saved achievements</p></div></button>
+      <button className="feature-card" onClick={onHow}><i>i</i><div><h2>How to Play</h2><p>Complete host and player instructions</p></div></button>
+    </section>
+  </main>;
+}
+
+function makeDeck(settings) {
+  const pool = settings.mix === "Mixed" ? SURVEY_BANK : SURVEY_BANK.filter(x=>x.category===settings.mix);
+  const recent = JSON.parse(localStorage.getItem("showdown-recent") || "[]");
+  const fresh = shuffle(pool.filter(x=>!recent.includes(x.id)));
+  const used = shuffle(pool.filter(x=>recent.includes(x.id)));
+  const deck = [...fresh,...used].slice(0,settings.rounds);
+  localStorage.setItem("showdown-recent", JSON.stringify(deck.map(x=>x.id).slice(-18)));
+  return deck;
+}
+
+function Scoreboard({ teams, scores, active, playerIndex }) {
+  return <section className="scoreboard">{teams.map((t,i)=><article key={i} className={`score-team team-${i} ${active===i?"active":""}`}>
+    <div><span>{t.name}</span><small>At buzzer: {t.players[playerIndex % 5]}</small></div><strong>{scores[i]}</strong>
   </article>)}</section>;
 }
 
-function ShellHeader({title,subtitle,onMenu,sound,setSound}) {
-  return <header><div><span className="eyebrow">CHRISTMAS BIBLE GAME NIGHT</span><h1>{title}</h1></div><div className="round-chip">{subtitle}</div><div className="top-actions"><button onClick={()=>setSound(v=>!v)}>{sound?"♪":"×♪"}</button><button onClick={onMenu}>⌂</button></div></header>;
+function SurveyGame({ teams, settings, onHome, sound, setSound, setRewards }) {
+  const [deck] = useState(()=>makeDeck(settings));
+  const [roundIndex,setRoundIndex]=useState(0), [scores,setScores]=useState([0,0]), [revealed,setRevealed]=useState([]);
+  const [stage,setStage]=useState("faceoff"), [buzzed,setBuzzed]=useState(null), [active,setActive]=useState(null), [original,setOriginal]=useState(null);
+  const [strikes,setStrikes]=useState([0,0]), [seconds,setSeconds]=useState(DIFFICULTIES[settings.difficulty].seconds), [running,setRunning]=useState(false), [xFlash,setXFlash]=useState(0);
+  const soundFx=useSound(sound), round=deck[roundIndex], mult=roundIndex < 3 ? 1 : roundIndex < 6 ? 2 : 3;
+  const bank=useMemo(()=>revealed.reduce((sum,i)=>sum+round.a[i][1]*mult,0),[revealed,round,mult]);
+  useEffect(()=>{ if(!running||seconds<=0)return; const id=setTimeout(()=>setSeconds(s=>s-1),1000); return()=>clearTimeout(id); },[running,seconds]);
+  useEffect(()=>{ if(seconds===0){setRunning(false);soundFx("wrong");setXFlash(x=>x+1);} },[seconds]);
+  const buzz = i => { if(stage!=="faceoff"||buzzed!==null)return; setBuzzed(i);setActive(i);setOriginal(i);soundFx("buzz"); };
+  const reveal = i => { if(revealed.includes(i))return;setRevealed(r=>[...r,i]);soundFx("right"); };
+  const beginPlay = pass => { const owner=pass?1-buzzed:buzzed;setActive(owner);setOriginal(owner);setStage("play");setRunning(true); };
+  const strike = () => { if(active===null)return; const next=[...strikes];next[active]++;setStrikes(next);setXFlash(x=>x+1);soundFx("wrong"); if(next[active]>=DIFFICULTIES[settings.difficulty].strikes){setStage("steal");setActive(1-active);setRunning(false);} };
+  const award = team => { setScores(s=>s.map((v,i)=>i===team?v+bank:v)); setStage("roundover");setRunning(false);soundFx("win"); };
+  const next = () => { if(roundIndex===deck.length-1){const winner=scores[0]>=scores[1]?0:1;setRewards(r=>({...r,stars:r.stars+3,wins:r.wins.map((v,i)=>i===winner?v+1:v),lastScores:scores}));onHome();return;} setRoundIndex(i=>i+1);setRevealed([]);setStage("faceoff");setBuzzed(null);setActive(null);setOriginal(null);setStrikes([0,0]);setSeconds(DIFFICULTIES[settings.difficulty].seconds);setRunning(false); };
+  return <main className="game-shell">
+    <Header title="Survey Showdown" sub={`Round ${roundIndex+1}/${deck.length} • ${mult}×`} {...{onHome,sound,setSound}}/>
+    <Scoreboard {...{teams,scores,active}} playerIndex={roundIndex}/>
+    <section className="question-panel"><span>{round.category} • {round.ref}</span><h2>{round.q}</h2></section>
+    {stage==="faceoff" && <section className="buzzer-zone"><h3>{buzzed===null?"FACE-OFF — first player to buzz answers":"BUZZER LOCKED"}</h3><div>{teams.map((t,i)=><button key={i} disabled={buzzed!==null} className={`team-buzzer team-${i} ${buzzed===i?"winner":""}`} onClick={()=>buzz(i)}><small>{t.players[roundIndex%5]}</small><b>{buzzed===i?"BUZZED!":"HIT BUZZER"}</b><span>{t.name}</span></button>)}</div>{buzzed!==null&&<aside><p>Host reveals the face-off answer. Higher answer chooses.</p><button onClick={()=>beginPlay(false)}>PLAY</button><button onClick={()=>beginPlay(true)}>PASS</button></aside>}</section>}
+    <section className="survey-board">{round.a.map(([answer,points],i)=><button key={answer} onClick={()=>reveal(i)} className={`survey-answer ${revealed.includes(i)?"revealed":""}`}><b>{i+1}</b><span>{revealed.includes(i)?answer:"SURVEY SAYS..."}</span><strong>{revealed.includes(i)?points*mult:""}</strong></button>)}</section>
+    <section className="host-dock"><div className="timer"><button onClick={()=>setRunning(v=>!v)}>{running?"PAUSE":"START"}</button><strong className={seconds<=5?"urgent":""}>{seconds}</strong><button onClick={()=>setSeconds(DIFFICULTIES[settings.difficulty].seconds)}>RESET</button></div><div className="round-bank"><small>ROUND BANK</small><strong>{bank}</strong></div><div className="strike-meter">{teams.map((t,i)=><span key={i}>{t.name}: {Array.from({length:DIFFICULTIES[settings.difficulty].strikes},(_,j)=><b key={j} className={j<strikes[i]?"on":""}>×</b>)}</span>)}</div>
+      {(stage==="play"||stage==="steal")&&<button className="danger" onClick={strike}>NOT ON BOARD — STRIKE</button>}
+      {stage==="play"&&<button className="award" onClick={()=>award(active)}>AWARD BANK TO {teams[active].name}</button>}
+      {stage==="steal"&&<><span className="steal-call">STEAL CHANCE: {teams[active].name}</span><button className="award" onClick={()=>award(active)}>SUCCESSFUL STEAL</button><button onClick={()=>award(original)}>MISSED STEAL</button></>}
+      {stage==="roundover"&&<button className="primary" onClick={next}>{roundIndex===deck.length-1?"FINISH GAME":"NEXT FACE-OFF →"}</button>}
+    </section>
+    {xFlash>0&&<div key={xFlash} className="strike-flash">×</div>}
+  </main>;
 }
 
-function SurveyMode({rounds,title,names,onMenu,sound,setSound}) {
-  const [team,setTeam]=useState(()=>freshScores(names)); const [idx,setIdx]=useState(0); const [revealed,setRevealed]=useState([]); const [strikes,setStrikes]=useState([0,0]); const [seconds,setSeconds]=useState(30); const [running,setRunning]=useState(false); const buzz=useFeedback(sound); const round=rounds[idx];
-  const bank=useMemo(()=>round.a.reduce((s,[,p],i)=>s+(revealed.includes(i)?p*round.mult:0),0),[round,revealed]);
+function ChallengeGame({ teams, onHome, sound, setSound, setRewards }) {
+  const [deck] = useState(()=>shuffle(CHALLENGE_BANK)); const [idx,setIdx]=useState(0),[active,setActive]=useState(0),[scores,setScores]=useState([0,0]),[picked,setPicked]=useState(null); const fx=useSound(sound),item=deck[idx];
+  const choose=i=>{if(picked!==null)return;setPicked(i);if(i===item.answer){setScores(s=>s.map((v,j)=>j===active?v+10:v));fx("right")}else fx("wrong")};
+  const next=()=>{if(idx===deck.length-1){setRewards(r=>({...r,stars:r.stars+2,lastScores:scores}));onHome()}else{setIdx(i=>i+1);setPicked(null);setActive(a=>1-a)}};
+  return <main className="game-shell"><Header title="Challenge Arcade" sub={`${item.type} • ${idx+1}/${deck.length}`} {...{onHome,sound,setSound}}/><Scoreboard {...{teams,scores,active}} playerIndex={idx}/><section className="challenge-card"><span className="eyebrow">10 POINTS</span><h2>{item.q}</h2><div>{item.choices.map((c,i)=><button key={c} onClick={()=>choose(i)} className={picked===null?"":i===item.answer?"correct":i===picked?"wrong":"dim"}><b>{String.fromCharCode(65+i)}</b>{c}</button>)}</div>{picked!==null&&<p>{item.note}</p>}<footer><button onClick={()=>setActive(a=>1-a)}>Answering: {teams[active].name}</button><button className="primary" onClick={next}>NEXT →</button></footer></section></main>;
+}
+
+function FastMoney({ teams, onHome, sound, setSound, setRewards }) {
+  const [deck] = useState(()=>shuffle(FAST_MONEY_BANK).slice(0,5)),[player,setPlayer]=useState(1),[idx,setIdx]=useState(0),[shown,setShown]=useState(false),[total,setTotal]=useState(0),[used,setUsed]=useState([]),[seconds,setSeconds]=useState(20),[running,setRunning]=useState(false); const fx=useSound(sound),item=deck[idx];
   useEffect(()=>{if(!running||seconds<=0)return;const id=setTimeout(()=>setSeconds(s=>s-1),1000);return()=>clearTimeout(id)},[running,seconds]);
-  useEffect(()=>{if(seconds===0){setRunning(false);buzz("wrong")}},[seconds]);
-  const change=n=>{setIdx(n);setRevealed([]);setStrikes([0,0]);setSeconds(30);setRunning(false)};
-  const award=i=>{setTeam(t=>{const scores=[...t.scores];scores[i]+=bank;return{...t,scores}});setRevealed(round.a.map((_,i)=>i));buzz("right")};
-  return <main className="game-shell"><ShellHeader title={title} subtitle={`Round ${idx+1} / ${rounds.length}`} {...{onMenu,sound,setSound}}/><ScoreRow {...{team,setTeam}}/>
-    <section className="board-wrap"><div className="question"><span>{idx+1}</span><h2>{round.q}</h2><small>{round.ref} · {round.mult}x points</small></div><div className="answers">{round.a.map(([a,p],i)=><button className={`answer ${revealed.includes(i)?"revealed":""}`} key={a} onClick={()=>{if(!revealed.includes(i)){setRevealed(v=>[...v,i]);buzz("right")}}}><b>{i+1}</b><span>{revealed.includes(i)?a:"TAP TO REVEAL"}</span><strong>{revealed.includes(i)?p*round.mult:""}</strong></button>)}</div></section>
-    <section className="control-dock"><div className="timer"><button onClick={()=>{setSeconds(30);setRunning(false)}}>↺</button><strong className={seconds<=5?"urgent":""}>{seconds}</strong><button onClick={()=>setRunning(v=>!v)}>{running?"Pause":"Start"}</button></div><div className="bank"><span>ROUND BANK</span><strong>{bank}</strong></div><div className="host-controls"><button className="strike-btn" onClick={()=>{const s=[...strikes];s[team.active]=Math.min(3,s[team.active]+1);setStrikes(s);buzz("wrong")}}>× Strike ({strikes[team.active]})</button><button onClick={()=>award(0)}>Award {team.names[0]}</button><button onClick={()=>award(1)}>Award {team.names[1]}</button></div></section>
-    <nav><button disabled={!idx} onClick={()=>change(idx-1)}>← Previous</button><span>{idx+1} / {rounds.length}</span><button disabled={idx===rounds.length-1} onClick={()=>change(idx+1)}>Next round →</button></nav></main>;
+  const add=(i,p)=>{if(used.includes(i))return;setUsed(v=>[...v,i]);setTotal(v=>v+p);fx("right")};
+  const next=()=>{if(idx<4)setIdx(i=>i+1);else if(player===1){setPlayer(2);setIdx(0)}else{setRewards(r=>({...r,stars:r.stars+(total>=200?5:1),fastWins:r.fastWins+(total>=200?1:0),lastScores:[total,200]}));onHome();return}setShown(false);setUsed([]);setSeconds(idx===4&&player===1?25:player===2?25:20);setRunning(false)};
+  return <main className="game-shell"><Header title="Fast Money" sub={`Player ${player} • Question ${idx+1}/5`} {...{onHome,sound,setSound}}/><section className="fast-top"><div><small>TARGET</small><b>200</b></div><div><small>TOTAL</small><b>{total}</b></div><div><small>TIMER</small><b>{seconds}</b><button onClick={()=>setRunning(v=>!v)}>{running?"Pause":"Start"}</button></div></section><section className="challenge-card"><h2>{item.q}</h2>{!shown?<button className="primary jumbo" onClick={()=>setShown(true)}>SHOW ANSWER BOARD</button>:<div className="fast-list">{item.a.map(([a,p],i)=><button className={used.includes(i)?"used":""} key={a} onClick={()=>add(i,p)}><span>{a}</span><b>{p}</b></button>)}</div>}<footer><span>{teams[0].players[player-1]} is playing</span><button className="primary" onClick={next}>{player===2&&idx===4?"FINISH":"NEXT →"}</button></footer></section></main>;
 }
 
-function QuizMode({items,title,names,onMenu,sound,setSound}) {
-  const [team,setTeam]=useState(()=>freshScores(names)); const [idx,setIdx]=useState(0); const [picked,setPicked]=useState(null); const buzz=useFeedback(sound); const item=items[idx];
-  const choose=i=>{if(picked!==null)return;setPicked(i);if(i===item.answer){setTeam(t=>{const scores=[...t.scores];scores[t.active]+=10;return{...t,scores}});buzz("right")}else buzz("wrong")};
-  const move=n=>{setIdx(n);setPicked(null)};
-  return <main className="game-shell quiz-shell"><ShellHeader title={title} subtitle={`Question ${idx+1} / ${items.length}`} {...{onMenu,sound,setSound}}/><ScoreRow {...{team,setTeam}}/><section className="quiz-card"><span className="eyebrow">10 POINTS</span><h2>{item.q}</h2><div className="choice-grid">{item.choices.map((c,i)=><button key={c} onClick={()=>choose(i)} className={picked===null?"":i===item.answer?"correct":i===picked?"wrong":"dim"}><b>{String.fromCharCode(65+i)}</b>{c}</button>)}</div>{picked!==null&&<p className="explain">{item.note}</p>}</section><nav><button disabled={!idx} onClick={()=>move(idx-1)}>← Previous</button><span>Tap a team before answering</span><button disabled={idx===items.length-1} onClick={()=>move(idx+1)}>Next →</button></nav></main>;
-}
+function Rewards({ rewards, teams, onHome }) { return <main className="info-screen"><Header title="Rewards & Scores" sub="Saved on this device" onHome={onHome} sound={false} setSound={()=>{}}/><section className="reward-grid"><article><i>★</i><strong>{rewards.stars}</strong><span>Showdown Stars</span></article><article><i>♛</i><strong>{rewards.wins[0]}</strong><span>{teams[0].name} Wins</span></article><article><i>♛</i><strong>{rewards.wins[1]}</strong><span>{teams[1].name} Wins</span></article><article><i>⚡</i><strong>{rewards.fastWins}</strong><span>Fast Money Wins</span></article></section><section className="badge-rack"><h2>Achievement Badges</h2><div><span className={rewards.stars>=3?"earned":""}>First Star</span><span className={rewards.stars>=10?"earned":""}>Holiday Hero</span><span className={rewards.fastWins?"earned":""}>Fast Money 200</span><span className={rewards.wins[0]+rewards.wins[1]>=5?"earned":""}>Five-Time Champion</span></div></section></main> }
 
-function FastMoney({names,onMenu,sound,setSound}) {
-  const [player,setPlayer]=useState(1),[idx,setIdx]=useState(0),[revealed,setRevealed]=useState(false),[used,setUsed]=useState([]),[total,setTotal]=useState(0),[seconds,setSeconds]=useState(20),[running,setRunning]=useState(false); const buzz=useFeedback(sound), item=FAST_MONEY[idx];
-  useEffect(()=>{if(!running||seconds<=0)return;const id=setTimeout(()=>setSeconds(s=>s-1),1000);return()=>clearTimeout(id)},[running,seconds]);
-  const add=(i,p)=>{if(used.includes(i))return;setUsed(v=>[...v,i]);setTotal(v=>v+p);buzz("right")};
-  const next=()=>{if(idx<4){setIdx(idx+1)}else if(player===1){setPlayer(2);setIdx(0)};setRevealed(false);setUsed([]);setSeconds(20);setRunning(false)};
-  return <main className="game-shell fast-shell"><ShellHeader title="Fast Money" subtitle={`Player ${player} · ${idx+1}/5`} {...{onMenu,sound,setSound}}/><section className="fast-score"><div><span>TARGET</span><strong>200</strong></div><div><span>TOTAL</span><strong>{total}</strong></div><div><span>TIMER</span><strong className={seconds<=5?"urgent":""}>{seconds}</strong><button onClick={()=>setRunning(v=>!v)}>{running?"Pause":"Start"}</button></div></section><section className="quiz-card"><span className="eyebrow">PLAYER {player} · QUESTION {idx+1}</span><h2>{item.q}</h2>{!revealed?<button className="primary reveal-all" onClick={()=>setRevealed(true)}>Show answer board</button>:<div className="fast-answers">{item.a.map(([a,p],i)=><button className={used.includes(i)?"used":""} key={a} onClick={()=>add(i,p)}><span>{a}</span><strong>{p}</strong></button>)}</div>}</section><nav><button onClick={()=>{setSeconds(20);setRunning(false)}}>Reset timer</button><span>{total>=200?"YOU WON!":"Tap the matching answer to score"}</span><button onClick={next}>{player===2&&idx===4?"Finish":"Next →"}</button></nav></main>;
-}
+function HowTo({ onHome }) { return <main className="info-screen"><Header title="How to Play" sub="Host guide" onHome={onHome} sound={false} setSound={()=>{}}/><section className="how-grid">
+  <article><b>1</b><h2>Sign in the teams</h2><p>Enter two team names and five players per team. Player 1 is the captain. Choose difficulty, question mix, and game length.</p></article>
+  <article><b>2</b><h2>Face off</h2><p>The named player from each team hits their giant buzzer. The host taps their answer on the board. The higher revealed answer chooses PLAY or PASS.</p></article>
+  <article><b>3</b><h2>Play the board</h2><p>Players answer in roster order. The host taps matching survey answers to animate them open. Tap NOT ON BOARD for a large X and strike sound.</p></article>
+  <article><b>4</b><h2>Strike and steal</h2><p>After the allowed strikes, the other team gets one answer. A match steals the whole bank; a miss awards the bank to the original team.</p></article>
+  <article><b>5</b><h2>Score and win</h2><p>Early rounds are single points, middle rounds double, and final rounds triple. Highest total wins. Saved stars and wins appear under Rewards.</p></article>
+  <article><b>6</b><h2>Fast Money</h2><p>Two teammates answer five shuffled questions separately. Player 1 gets 20 seconds, Player 2 gets 25. Score 200 combined points to win.</p></article>
+  <article><b>Tip</b><h2>Best screen setup</h2><p>Cast the host device to a TV, or place a tablet between teams. Phones work in portrait and landscape. Add the app to the home screen for a full-screen feel.</p></article>
+  </section></main> }
 
-function App(){
-  const [screen,setScreen]=useState("welcome"),[mode,setMode]=useState(null),[sound,setSound]=useState(true),[names,setNames]=useState(["Team Bethlehem","Team Nazareth"]),[installEvent,setInstallEvent]=useState(null);
-  useEffect(()=>{const h=e=>{e.preventDefault();setInstallEvent(e)};window.addEventListener("beforeinstallprompt",h);if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js");return()=>window.removeEventListener("beforeinstallprompt",h)},[]);
-  if(screen==="welcome")return <main className="splash"><div className="splash-art"/><section className="welcome glass"><span className="eyebrow">THE COMPLETE HOLIDAY GAME NIGHT</span><h1>Christmas Bible<br/><b>Survey Showdown</b></h1><p>Bible boards, Fast Money, trivia, timeline challenges, and hilarious family holiday rounds.</p><div className="team-inputs">{[0,1].map(i=><label key={i}>Team {i+1}<input value={names[i]} onChange={e=>{const n=[...names];n[i]=e.target.value;setNames(n)}}/></label>)}</div><button className="primary" onClick={()=>setScreen("menu")}>Choose a game</button><div className="welcome-actions">{installEvent&&<button onClick={async()=>{await installEvent.prompt();setInstallEvent(null)}}>Install app</button>}<button onClick={()=>setSound(v=>!v)}>{sound?"Sound on":"Sound off"}</button></div><small>Original entertainment product. Survey points are gameplay values, not scientific results.</small></section></main>;
-  if(screen==="menu")return <main className="mode-menu"><header><div><span className="eyebrow">CHOOSE YOUR GAME</span><h1>Tonight's Lineup</h1></div><div className="top-actions"><button onClick={()=>setScreen("welcome")}>←</button></div></header><section className="mode-grid">{MODES.map(([id,t,d,icon])=><button key={id} onClick={()=>{setMode(id);setScreen("play")}}><i>{icon}</i><div><h2>{t}</h2><p>{d}</p></div><b>PLAY →</b></button>)}</section><p className="menu-note">Bible modes use paraphrases and references from Matthew 1-2 and Luke 1-2. Holiday Hilarity is clearly marked as party fun, not Bible fact.</p></main>;
-  const common={names,onMenu:()=>setScreen("menu"),sound,setSound};
-  if(mode==="bible")return <SurveyMode rounds={BIBLE_ROUNDS} title="Bible Survey Showdown" {...common}/>;
-  if(mode==="holiday")return <SurveyMode rounds={HOLIDAY_ROUNDS} title="Holiday Hilarity" {...common}/>;
-  if(mode==="fast")return <FastMoney {...common}/>;
-  if(mode==="said")return <QuizMode items={WHO_SAID_IT} title="Who Said It?" {...common}/>;
-  if(mode==="trivia")return <QuizMode items={TRIVIA} title="Nativity Trivia" {...common}/>;
-  return <QuizMode items={WHICH_FIRST} title="Which Came First?" {...common}/>;
+function App() {
+  const [screen,setScreen]=useState("welcome"),[teams,setTeams]=useStored("showdown-teams",defaultTeams),[sound,setSound]=useStored("showdown-sound",true),[settings,setSettings]=useStored("showdown-settings",{difficulty:"Classic",mix:"Mixed",rounds:8}),[rewards,setRewards]=useStored("showdown-rewards",{stars:0,wins:[0,0],fastWins:0,lastScores:[0,0]});
+  useEffect(()=>{if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js")},[]);
+  if(screen==="welcome")return <Welcome {...{teams,setTeams,sound,setSound}} onStart={()=>setScreen("lobby")}/>;
+  if(screen==="lobby")return <Lobby {...{teams,settings,setSettings}} onPlay={()=>setScreen("survey")} onChallenges={()=>setScreen("challenge")} onFast={()=>setScreen("fast")} onRewards={()=>setScreen("rewards")} onHow={()=>setScreen("how")} onBack={()=>setScreen("welcome")}/>;
+  const common={teams,onHome:()=>setScreen("lobby"),sound,setSound,setRewards};
+  if(screen==="survey")return <SurveyGame {...common} settings={settings}/>;
+  if(screen==="challenge")return <ChallengeGame {...common}/>;
+  if(screen==="fast")return <FastMoney {...common}/>;
+  if(screen==="rewards")return <Rewards {...{rewards,teams}} onHome={()=>setScreen("lobby")}/>;
+  return <HowTo onHome={()=>setScreen("lobby")}/>;
 }
 
 createRoot(document.getElementById("root")).render(<App/>);

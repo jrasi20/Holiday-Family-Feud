@@ -1,4 +1,4 @@
-const CACHE = "bible-showdown-v1";
+﻿const CACHE = "bible-showdown-v2";
 const ASSETS = ["./", "./manifest.webmanifest", "./assets/icon-192.png", "./assets/icon-512.png"];
 self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
 self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
@@ -10,3 +10,4 @@ self.addEventListener("fetch", event => {
     return response;
   }).catch(() => caches.match(event.request).then(hit => hit || caches.match("./"))));
 });
+
