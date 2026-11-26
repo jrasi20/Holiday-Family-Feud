@@ -126,11 +126,11 @@ function renderAnswer(s, teams, typed, hadFocus) {
   $("#af").onsubmit = e => { e.preventDefault(); sendAnswer(box.value); };
   $("#mic")?.addEventListener("click", toggleMic);
 }
-function sendAnswer(text) {
+function sendAnswer(text, alts = []) {
   text = String(text || "").trim();
   if (!text || sent) return;
   unlock();
-  if (client.send({ t: "answer", text })) { sent = true; vib(40); beep(520, 780, 0.12, "triangle", 0.1); render(); }
+  if (client.send({ t: "answer", text, alts })) { sent = true; vib(40); beep(520, 780, 0.12, "triangle", 0.1); render(); }
 }
 function toggleMic() {
   unlock();
@@ -140,7 +140,7 @@ function toggleMic() {
   recog.onresult = ev => {
     const r = ev.results[ev.results.length - 1], text = r[0].transcript;
     const box = $("#ans"); if (box) box.value = text;
-    if (r.isFinal) { listening = false; sendAnswer(text); }
+    if (r.isFinal) { listening = false; sendAnswer(text, [...r].slice(1).map(x => x.transcript)); }
   };
   recog.onend = () => { listening = false; render(); };
   recog.onerror = e => { listening = false; if (e.error === "not-allowed") alert("Please allow the microphone, or type your answer."); render(); };
@@ -217,6 +217,11 @@ const linkLine = () => `<p class="link-line ${link}">${{ connected: "● Connect
 
 /* ---------- boot ---------- */
 document.addEventListener("pointerdown", unlock, { once: true });
-document.addEventListener("visibilitychange", () => { if (!document.hidden && client && !client.conn?.open) client.connect(); });
+/* keep the screen awake while playing, so phones don't lock mid-game (re-acquired when the page comes back) */
+let wakeLock = null;
+async function stayAwake() { try { if (!document.hidden && !wakeLock) { wakeLock = await navigator.wakeLock?.request("screen"); wakeLock?.addEventListener("release", () => { wakeLock = null; }); } } catch {} }
+document.addEventListener("visibilitychange", () => { if (!document.hidden) stayAwake(); });
+document.addEventListener("pointerdown", stayAwake);
+stayAwake();
 if (code) { addEventListener("load", connect); }
 render();

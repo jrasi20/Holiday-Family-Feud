@@ -86,13 +86,25 @@ function confirmLeave() {
 
 /* ================= click + key dispatch ================= */
 const actions = {};
+const QUIET_UI = new Set(["tile", "act", "enterGame"]);      // game actions have their own sounds
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]");
   if (!el || el.disabled) return;
   audio.unlock();
+  if (!QUIET_UI.has(el.dataset.act)) audio.play("press", { vol: 0.55 });
   const fn = actions[el.dataset.act];
   if (fn) fn(el.dataset.v, el);
 });
+let lastHover = 0, hoverEl = null;
+document.addEventListener("pointerover", e => {
+  if (e.pointerType !== "mouse") return;
+  const el = e.target.closest("button:not(:disabled), [data-act]");
+  if (!el || el === hoverEl) return;
+  hoverEl = el;
+  const now = performance.now();
+  if (now - lastHover > 70) { lastHover = now; audio.play("hover", { vol: 0.5 }); }
+});
+document.addEventListener("pointerout", e => { if (hoverEl && !hoverEl.contains(e.relatedTarget)) hoverEl = null; });
 stage.addEventListener("input", e => {
   const el = e.target;
   if (el.dataset.team !== undefined) { S.teams[+el.dataset.team].name = el.value.slice(0, 18); save(); syncPhones(); }
@@ -177,7 +189,8 @@ function ensureRoom() {
   });
   room.open();
 }
-const teamRoster = t => roster.filter(p => p.team === t);
+const teamRoster = t => roster.filter(p => p.team === t && !p.away);      // who can play right now
+const teamSeats = t => roster.filter(p => p.team === t);                   // incl. phones asleep for a moment
 const remoteOn = () => !!room?.hostRemote;
 
 function onPhone(m, pid) {
@@ -191,12 +204,12 @@ function onPhone(m, pid) {
   }
   if (m.t === "answer" && screen === "survey" && G) {
     const me = roster.find(p => p.pid === pid);
-    if (me && mayAnswer(me)) submitAnswer(String(m.text || "").slice(0, 60), me);
+    if (me && mayAnswer(me)) submitAnswer(String(m.text || "").slice(0, 60), me, (m.alts || []).slice(0, 4).map(String));
     return;
   }
   if (m.t === "answer" && screen === "fast" && F) {
     const me = roster.find(p => p.pid === pid);
-    if (me && fmMayAnswer(me)) fmSubmit(String(m.text || "").slice(0, 60), me);
+    if (me && fmMayAnswer(me)) fmSubmit(String(m.text || "").slice(0, 60), me, (m.alts || []).slice(0, 4).map(String));
     return;
   }
   if (m.t === "pick" && screen === "arcade" && A) {
@@ -222,7 +235,7 @@ screens.cover = {
 actions.enterGame = () => {
   audio.unlock();
   audio.play("magic");
-  audio.music("menu");
+  audio.music("theme");
   setTimeout(() => audio.voice("vo-welcome"), 450);
   document.getElementById("cover").hidden = true;
   confetti(60, { x: 0.5, y: 0.8 });
@@ -230,7 +243,7 @@ actions.enterGame = () => {
 };
 
 screens.home = {
-  enter() { document.getElementById("cover").hidden = true; audio.music("menu"); },
+  enter() { document.getElementById("cover").hidden = true; audio.music("theme"); },
   render() {
     stage.innerHTML = `
     <div class="scene home">
@@ -296,9 +309,9 @@ screens.lobby = {
       <header class="lobby-head"><span class="kicker">Tonight's game</span><h1>${title}</h1></header>
       <div class="lobby-grid">
         ${[0, 1].map(t => `<section class="team-pod t${t}">
-          <span class="pod-label">Team ${t + 1}</span>
+          <span class="pod-label">Team ${t + 1} · ${teamSeats(t).length} ${teamSeats(t).length === 1 ? "player" : "players"}</span>
           <input class="team-name" data-team="${t}" value="${esc(S.teams[t].name)}" maxlength="18" spellcheck="false" aria-label="Team ${t + 1} name">
-          <div class="pod-players">${teamRoster(t).map(p => { const isNew = !seenChips.has(p.pid + t); seenChips.add(p.pid + t); return `<span class="chip ${isNew ? "pop-in" : ""}">${esc(p.name)}</span>`; }).join("") || `<span class="pod-empty">Players join by scanning the code</span>`}</div>
+          <div class="pod-players">${teamSeats(t).map(p => { const isNew = !seenChips.has(p.pid + t); seenChips.add(p.pid + t); return `<span class="chip ${isNew ? "pop-in" : ""} ${p.away ? "away" : ""}" title="${p.away ? "Phone asleep. Will reconnect" : ""}">${esc(p.name)}${p.away ? " · zz" : ""}</span>`; }).join("") || `<span class="pod-empty">Players join by scanning the code</span>`}</div>
         </section>`).join("")}
         <section class="join-card">
           <span class="kicker">Grab a phone buzzer</span>
@@ -306,6 +319,7 @@ screens.lobby = {
           ${ready ? `<div class="code-line">or visit <b>${esc(url.replace(/^https?:\/\//, "").replace(/\?.*$/, ""))}</b> · code <b class="code">${room.code}</b></div>` : ""}
         </section>
       </div>
+      ${roster.some(p => p.team === null) ? `<div class="lobby-choosing">${icon("phone")} Choosing a team: ${roster.filter(p => p.team === null).map(p => `<span class="chip">${esc(p.name || "New player")}</span>`).join("")}</div>` : ""}
       <footer class="lobby-foot">
         <div class="host-qr ${remoteOn() ? "linked" : ""}">
           ${ready ? `<div class="qr small">${qrSvg(hostUrl)}</div>` : ""}
@@ -443,12 +457,17 @@ function mayAnswer(me) {
   return !!a && me.team === a.team && (!a.pid || a.pid === me.pid);
 }
 /* a typed or spoken answer: from a player's phone, or from the TV's own answer box / mic */
-function submitAnswer(text, who = null) {
+/* try the typed/heard text first, then the speech engine's other guesses ("stalking" → "stocking") */
+function bestMatch(text, alts, answers) {
+  for (const t of [text, ...(alts || [])]) { const i = matchAnswer(t, answers); if (i >= 0) return i; }
+  return -1;
+}
+function submitAnswer(text, who = null, alts = []) {
   text = String(text || "").trim();
   if (!text || G.pending || !LIVE.includes(G.stage)) return;
   const a = answerer();
   G.said = { text, name: who?.name || tName(a.team), team: a.team, pid: who?.pid || a.pid };
-  const i = matchAnswer(text, G.round.a);
+  const i = bestMatch(text, alts, G.round.a);
   if (i >= 0 && G.revealed.includes(i) && G.stage === "play") {   // already up there: no strike, try again
     audio.play("nope"); audio.voice("vo-try-again");
     notify(G.said.pid, { kind: "again", text, msg: "Already on the board. Try another!" });
@@ -517,6 +536,7 @@ function strike(why) {
   notify(pid, { kind: "wrong", text: said, strikes: st === "play" ? G.strikes + 1 : 1, msg: why === "time" ? "Time's up!" : "Not on the board" });
   if (st === "faceoffAnswer") {
     xCard(1);
+    setTimeout(() => audio.voice("vo-wrong"), 1000);
     G.fo.res[G.fo.step] = -1;
     if (G.fo.step === 0) { G.fo.step = 1; G.msg = `${why === "time" ? "Time's up! " : ""}${tName(G.fo.order[1])}, it's your chance!`; render(); return setTimer(S.settings.timer ? 15 : 0, () => strike("time")); }
     return settleFaceoff();
@@ -545,10 +565,10 @@ document.addEventListener("submit", e => {
   tvSubmit(v);
   box.value = "";
 });
-function tvSubmit(v) {
+function tvSubmit(v, alts = []) {
   if (!String(v).trim()) return;
-  if (screen === "survey" && G) { const a = answerer(); submitAnswer(v, a?.pid ? roster.find(p => p.pid === a.pid) : null); }
-  else if (screen === "fast" && F) fmSubmit(v);
+  if (screen === "survey" && G) { const a = answerer(); submitAnswer(v, a?.pid ? roster.find(p => p.pid === a.pid) : null, alts); }
+  else if (screen === "fast" && F) fmSubmit(v, null, alts);
 }
 function listenTV() {
   if (!SR) { card(`<div class="banner-card"><b>Voice answers</b><small>Use Chrome, Edge or Safari to answer by voice. Typing works everywhere!</small></div>`, "banner", 2600); return; }
@@ -559,7 +579,7 @@ function listenTV() {
   recog.onresult = ev => {
     const r = ev.results[ev.results.length - 1], text = r[0].transcript;
     const box = document.getElementById("tvAnswer"); if (box) box.value = text;
-    if (r.isFinal) { listening = false; tvSubmit(text); }
+    if (r.isFinal) { listening = false; tvSubmit(text, [...r].slice(1).map(x => x.transcript)); }
   };
   recog.onend = () => { listening = false; if (screen === "survey" || screen === "fast") render(); };
   recog.onerror = () => { listening = false; };
@@ -597,6 +617,7 @@ function choose(v) {
   closeCard();
   const t = G.fo.winner, play = v === "play";
   G.control = play ? t : 1 - t;
+  setTimeout(() => turnVoice(G.control), 1400);
   G.ptr[G.control] = G.ri + G.fo.retry + (play ? 1 : 0);
   G.stage = "play"; G.msg = play ? "" : `${tName(t)} passed!`;
   audio.play("whoosh");
@@ -604,6 +625,10 @@ function choose(v) {
   card(`<div class="banner-card t${G.control}"><small>${play ? "They're playing it!" : "Passed!"}</small><b>${esc(tName(G.control))}'s board</b></div>`, "banner", 1300);
   if (G.revealed.length === G.round.a.length) return endRound(G.control);
   setTimer(S.settings.timer, () => strike("time"));
+}
+function turnVoice(t) {
+  const n = tName(t).toLowerCase().replace(/^team /, "");
+  if (n === "bethlehem" || n === "nazareth") audio.voice(`vo-turn-${n}`);
 }
 function toSteal() {
   G.stage = "steal"; G.msg = "";
@@ -633,10 +658,10 @@ function endRound(team, sweep = false) {
 function revealLeft(i) {
   if (G.stage !== "roundEnd" || !G.round.a[i] || G.revealed.includes(i)) return;
   reveal(i, "after"); render();
-  if (G.revealed.length === G.round.a.length) setTimeout(autoNext, 900);
+  if (G.revealed.length === G.round.a.length) autoNext();
 }
 function revealAllLeft() {
-  G.round.a.map((_, i) => i).filter(i => !G.revealed.includes(i)).forEach((i, k) => setTimeout(() => revealLeft(i), k * 420));
+  G.round.a.map((_, i) => i).filter(i => !G.revealed.includes(i)).forEach((i, k) => setTimeout(() => revealLeft(i), k * 1300));
 }
 
 function nextRound() {
@@ -656,6 +681,11 @@ function nextRound() {
 function autoNext() {
   if (G.stage !== "roundEnd" || G.revealed.length < G.round.a.length) return;
   clearTimeout(G._auto);
+  // hold the finished board on screen so everyone can read it, then the round card
+  G._auto = setTimeout(() => showNextCard(), 4500);
+}
+function showNextCard() {
+  if (screen !== "survey" || !G || G.stage !== "roundEnd") return;
   const last = G.ri === G.deck.length - 1;
   card(`<div class="next-card"><small>${last ? "That's the game!" : `Round ${G.ri + 1} complete`}</small>
     <div class="nc-scores"><span class="t0">${esc(tName(0))}<b>${G.scores[0]}</b></span><span class="t1">${esc(tName(1))}<b>${G.scores[1]}</b></span></div>
@@ -779,7 +809,10 @@ function fmMayAnswer(me) {
   return !want || want.pid === me.pid;
 }
 screens.fast = {
-  enter() { audio.music("fastmoney"); setTimeout(() => { if (!audio.voice("vo-fast-money")) audio.play("transition"); }, 300); },
+  enter() {
+    if (F?.phase === "final") { audio.music("round"); return; }        // back from the win screen to read the answers
+    audio.music("fastmoney"); setTimeout(() => { if (!audio.voice("vo-fast-money")) audio.play("transition"); }, 300);
+  },
   render() {
     const ph = F.phase, pl = fmPl(), rem = remoteOn();
     const total = fmTotal();
@@ -788,7 +821,7 @@ screens.fast = {
         const shown = qi < F.shown[p], ix = F.pick[p][qi], said = F.ans[p][qi];
         if (!shown) return `<div class="fm-cell blank"></div>`;
         return `<div class="fm-cell ${ix >= 0 ? "hit" : "miss"} ${ix === 0 ? "top" : ""} flip"><span>${esc(said || "(pass)")}</span><b>${ix >= 0 ? q.a[ix][1] : 0}</b></div>`;
-      }).join("")}</div>`).join("");
+      }).join("")}${F.tops ? (qi < F.tops ? `<div class="fm-cell topans flip"><span>${esc(q.a[0][0])}</span><b>${q.a[0][1]}</b></div>` : `<div class="fm-cell blank"></div>`) : ""}</div>`).join("");
     let center = "";
     if (ph === "intro") center = `<div class="fm-intro"><h1>FAST <span>MONEY</span></h1><p>Two players · five questions · type or say your answers · reach <b>200</b> together!</p>
       <div class="fm-team">${[0, 1].map(t => `<button class="${F.team === t ? "on" : ""} t${t}" data-act="act" data-v="fmTeam:${t}">${esc(tName(t))}</button>`).join("")}</div>
@@ -800,7 +833,7 @@ screens.fast = {
     stage.innerHTML = `<div class="scene fast">
       ${rays()}
       <div class="fm-board-wrap ${center ? "hidden" : ""}"><div class="board-chrome"><div class="marquee"></div>
-        <div class="fm-board"><div class="fm-heads"><span>${esc(fmPlayer(0))}</span><span>${esc(fmPlayer(1))}</span></div>${rows}<div class="fm-total"><small>TOTAL</small><b id="fmTotal">${F.shownTotal}</b><span>/ 200</span></div></div></div></div>
+        <div class="fm-board ${F.tops ? "tops" : ""}"><div class="fm-heads"><span>${esc(fmPlayer(0))}</span><span>${esc(fmPlayer(1))}</span>${F.tops ? "<span>Top answer</span>" : ""}</div>${rows}<div class="fm-total"><small>TOTAL</small><b id="fmTotal">${F.shownTotal}</b><span>/ 200</span></div></div></div></div>
       ${center ? `<div class="fm-center">${center}</div>` : ""}
       <div class="host-dock wide">
         ${fmLive() ? `<form class="tv-answer" data-form="tvAnswer" autocomplete="off"><input id="tvAnswer" placeholder="Type ${esc(fmPlayer(pl))}'s answer…" maxlength="60" spellcheck="false" enterkeyhint="next">
@@ -828,15 +861,16 @@ function fmControls() {
     }
     if (F.shown[p] < 5) return [{ a: "fmReveal", label: `Reveal answer ${F.shown[p] + 1} ▶`, kind: "gold", main: true }, ...out];
     if (ph === "rev1") return [{ a: "fmStart", v: 1, label: `Bring in ${fmPlayer(1)}: 25 seconds`, kind: "red", main: true }, ...out];
-    return [{ a: "fmDone", label: "Final result ▶", kind: "gold", main: true }, ...out];
+    return [...(F.tops < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : []), { a: "fmDone", label: "Final result ▶", kind: "gold", main: true }, ...out];
   }
+  if (ph === "final") return [...(F.tops < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : []), { a: "fmDone", label: "Back to the celebration ▶", kind: "gold", main: true }];
   return [];
 }
 /* a typed / spoken answer for the current Fast Money question */
-function fmSubmit(text, who = null) {
+function fmSubmit(text, who = null, alts = []) {
   text = String(text || "").trim();
   if (!fmLive() || !text) return;
-  const pl = fmPl(), ix = matchAnswer(text, F.qs[F.qi].a);
+  const pl = fmPl(), ix = bestMatch(text, alts, F.qs[F.qi].a);
   if (pl === 1 && ix >= 0 && ix === F.pick[0][F.qi]) {           // same answer as player 1
     audio.play("buzzer"); setTimeout(() => { if (!audio.voice("vo-duplicate")) audio.voice("vo-try-again"); }, 450);
     card(`<div class="banner-card hot"><b>DUPLICATE!</b><small>Already said. Try again!</small></div>`, "banner", 1200);
@@ -852,8 +886,14 @@ function fastAct(a, v) {
   if (a === "fmStart") {
     const pl = +v; F.phase = pl ? "p2" : "p1"; F.qi = 0; F.queue = [1, 2, 3, 4];
     audio.play("transition", { vol: 0.6 });
+    // "Player 1, you have 20 seconds…": the clock starts when the host finishes talking
+    const said = audio.voice(pl ? "vo-fm-player2" : "vo-fm-player1");
+    const wait = said ? Math.min(5000, audio.length(pl ? "vo-fm-player2" : "vo-fm-player1") * 1000 + 200) : 0;
+    Object.assign(T, { left: pl ? 25 : 20, max: pl ? 25 : 20 });
     render();
-    return setTimer(pl ? 25 : 20, fmEnd, true);
+    clearTimeout(F._go);
+    F._go = setTimeout(() => { if (screen === "fast" && fmLive()) setTimer(pl ? 25 : 20, () => fmEnd(false), true); }, wait);
+    return;
   }
   if (a === "fmPass" && fmLive()) {
     if (F.queue.length) { F.queue.push(F.qi); audio.play("whoosh", { vol: 0.5 }); return fmAdvance(); }
@@ -865,9 +905,24 @@ function fastAct(a, v) {
     F.shown[p]++;
     render();
     setTimeout(() => {
-      if (ix >= 0) { audio.play("chime"); if (ix === 0) { setTimeout(() => audio.play("top"), 250); confetti(60, { x: 0.5, y: 0.4 }); } }
-      else audio.wrong();
+      if (ix >= 0) {
+        audio.play("chime");
+        if (ix === 0) { setTimeout(() => audio.play("top"), 250); setTimeout(() => audio.voice("vo-top-answer"), 650); confetti(70, { x: 0.5, y: 0.4 }); }
+      } else audio.wrong();
+      // crossed 200? celebrate right now, don't make them wait
+      if (!F.won && fmTotal() >= 200) { F.won = true; setTimeout(() => { if (screen === "fast") fmFinish(); }, 1800); }
     }, 180);
+    return;
+  }
+  if (a === "fmTops") {
+    if (F._topsRunning) return;
+    F._topsRunning = true;
+    const step = () => {
+      if (screen !== "fast" || !F || F.tops >= 5) { if (F) F._topsRunning = false; if (screen === "fast") render(); return; }
+      F.tops = (F.tops || 0) + 1; render(); audio.play("chime", { rate: 1.08 });
+      setTimeout(step, 1300);
+    };
+    step();
     return;
   }
   if (a === "fmFix") {
@@ -875,19 +930,28 @@ function fastAct(a, v) {
     if (F.pick[p] && q < F.shown[p]) { F.pick[p][q] = i; if (i >= 0 && !F.ans[p][q]) F.ans[p][q] = F.qs[q].a[i][0]; audio.play(i >= 0 ? "chime" : "nope"); render(); }
     return;
   }
-  if (a === "fmDone") {
-    const total = fmTotal(), won = total >= 200;
-    go("results", { kind: "fast", winner: won ? 0 : null, won, scores: [total], title: won ? "FAST MONEY WIN!" : `${total} points!`, sub: won ? `${tName(F.team)} beat 200!` : "So close. Run it back!" });
-  }
+  if (a === "fmDone") return fmFinish();
 }
-function fmAdvance() { if (!F.queue.length) return fmEnd(); F.qi = F.queue.shift(); render(); }
-function fmEnd() {
-  stopClock();
+function fmFinish() {
+  const total = fmTotal(), won = total >= 200;
+  go("results", { kind: "fast", winner: won ? 0 : null, won, scores: [total], title: won ? "FAST MONEY WIN!" : `${total} points!`, sub: won ? `${tName(F.team)} beat 200!` : "So close. Run it back!" });
+}
+function fmAdvance() { if (!F.queue.length) return fmEnd(true); F.qi = F.queue.shift(); render(); }
+/* early = all five answered before the clock ran out (no "time's up" over the last answer) */
+function fmEnd(early = false) {
+  stopClock(); clearTimeout(F._go);
   const pl = fmPl();
   for (let q = 0; q < 5; q++) if (F.ans[pl][q] === undefined) { F.ans[pl][q] = ""; F.pick[pl][q] = -1; }
-  F.phase = pl ? "rev2" : "rev1"; audio.play("timeup");
-  setTimeout(() => { if (!audio.voice("vo-times-up")) audio.voice("vo-fm-reveal"); else setTimeout(() => audio.voice("vo-fm-reveal"), 1500); }, 300);
-  card(`<div class="banner-card"><b>Time!</b><small>Let's see what the survey says…</small></div>`, "banner", 1500);
+  F.phase = pl ? "rev2" : "rev1";
+  if (early) {
+    audio.play("chime", { rate: 1.1 });
+    setTimeout(() => audio.voice("vo-fm-reveal"), 500);
+    card(`<div class="banner-card"><b>All five locked in!</b><small>${T.left > 0 ? `${T.left} seconds to spare · ` : ""}Let's see what the survey says…</small></div>`, "banner", 1800);
+  } else {
+    audio.play("timeup");
+    setTimeout(() => { if (audio.voice("vo-times-up")) setTimeout(() => audio.voice("vo-fm-reveal"), 1500); else audio.voice("vo-fm-reveal"); }, 300);
+    card(`<div class="banner-card"><b>Time!</b><small>Let's see what the survey says…</small></div>`, "banner", 1600);
+  }
   render();
 }
 
@@ -909,7 +973,7 @@ function celebration() {
   const spots = [[6, 22], [14, 70], [4, 52], [22, 88], [88, 18], [94, 50], [80, 78], [72, 92], [30, 8], [66, 10], [38, 94], [56, 86]];
   return `<div class="cele">${spots.map(([x, y], i) => {
     const k = kinds[i % kinds.length];
-    return `<div class="cele-item c${i % 4}" style="left:${x}%;top:${y}%;--i:${i}"><img src="assets/celebrate/${k}.png" alt="" onerror="this.remove()">${CELE[k]}</div>`;
+    return `<div class="cele-item c${i % 4}" style="left:${x}%;top:${y}%;--i:${i}"><img src="assets/celebrate/${k}.webp" alt="" onerror="this.remove()">${CELE[k]}</div>`;
   }).join("")}</div>`;
 }
 
@@ -948,7 +1012,7 @@ function arcadeAct(a, v) {
     const c = A.deck[A.i], i = +v;
     A.picked = i;
     if (i === c.answer) { A.scores[A.team] += 10; audio.play("chime"); setTimeout(() => audio.voice("vo-great"), 600); confetti(60, { x: 0.5, y: 0.6 }); }
-    else { audio.wrong(); }
+    else { audio.wrong(); setTimeout(() => audio.voice("vo-wrong"), 1000); }
     return render();
   }
   if (a === "arcNext" && A.picked !== null) {
@@ -956,7 +1020,7 @@ function arcadeAct(a, v) {
       const sc = A.scores, w = sc[0] === sc[1] ? null : sc[0] > sc[1] ? 0 : 1;
       return go("results", { kind: "arcade", winner: w, scores: sc, title: w === null ? "It's a TIE!" : `${tName(w)} wins!`, sub: "Bible Challenge complete" });
     }
-    A.i++; A.team = 1 - A.team; A.picked = null; A.by = null; audio.play("whoosh", { vol: 0.5 }); freshScene = true; render();
+    A.i++; A.team = 1 - A.team; A.picked = null; A.by = null; audio.play("whoosh", { vol: 0.5 }); audio.voice("vo-next-question"); freshScene = true; render();
     setTimer(S.settings.timer || 0, () => arcadeAct("arcPick", -1));
   }
 }
@@ -989,10 +1053,17 @@ screens.results = {
       <div class="res-actions">
         <button class="btn gold xl" data-act="again">${icon("play")} Play again</button>
         ${R.kind === "survey" ? `<button class="btn red xl" data-act="fastFromResults">${icon("bolt")} Fast Money</button>` : ""}
+        ${R.kind === "fast" ? `<button class="btn red xl" data-act="fmAll">${icon("star")} See all the answers</button>` : ""}
         <button class="btn ghost xl" data-act="home">${icon("home")} Menu</button>
       </div>
     </div>`;
   }
+};
+actions.fmAll = () => {
+  if (!F) return;
+  [0, 1].forEach(p => { for (let q = 0; q < 5; q++) if (F.ans[p][q] !== undefined) F.shown[p] = Math.max(F.shown[p], q + 1); });
+  F.phase = "final"; F.tops = F.tops || 0;
+  go("fast", null);
 };
 actions.again = () => { if (R.kind === "fast") startFast(F?.team ?? 0); else if (R.kind === "arcade") startArcade(); else startSurvey(); };
 actions.fastFromResults = () => startFast(R.winner ?? 0);

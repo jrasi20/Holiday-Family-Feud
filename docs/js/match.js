@@ -51,11 +51,27 @@ function score(guess, variant) {
   return 0.5 + 0.3 * (hits / vt.length);
 }
 
+/* sound-alike code, for words the speech engine mishears ("stalking" ≈ "stocking") */
+const sound = w => {
+  w = w.toLowerCase().replace(/[^a-z]/g, "");
+  if (w.length < 4) return w;
+  const first = w[0];
+  return first + w.slice(1)
+    .replace(/ph/g, "f").replace(/ck|q|c(?=[aou])|ch/g, "k").replace(/c/g, "s").replace(/z/g, "s").replace(/x/g, "ks")
+    .replace(/[aeiouyhw]/g, "").replace(/l(?=k)/g, "").replace(/(.)\1+/g, "$1");
+};
+function soundsLike(guess, variant) {
+  const g = tokens(guess).map(sound), v = tokens(variant).filter(w => w.length >= 4).map(sound);
+  if (!v.length || !g.length) return 0;
+  const hits = v.filter(c => c.length >= 4 && g.some(x => x === c)).length;   // exact sound pattern only (no near-misses)
+  return hits === v.length ? 0.62 : 0;
+}
+
 /** index of the best-matching answer, or -1 if nothing on the board matches */
 export function matchAnswer(guess, answers) {
   let best = -1, bestScore = 0;
   answers.forEach((ans, i) => {
-    const s = Math.max(...variants(ans).map(v => score(guess, v)));
+    const s = Math.max(...variants(ans).map(v => Math.max(score(guess, v), soundsLike(guess, v))));
     if (s > bestScore) { bestScore = s; best = i; }
   });
   return bestScore >= 0.6 ? best : -1;

@@ -591,3 +591,32 @@ body.portrait-phone:not([data-screen="cover"]) #rotate-hint{display:flex}
 .lt-tag{text-transform:uppercase}
 
 .res-title span{background:linear-gradient(180deg,#fffaf0,#ffd86a 55%,#c4861e);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ---------- v8 ---------- */
+/* winner title: solid gold letters (gradient-clipped text glitched on bouncing letters) */
+.res-title{background:none !important;color:#ffd86a !important;-webkit-text-fill-color:#ffd86a;filter:none !important;
+  text-shadow:0 2px 0 #fff3c4,0 6px 0 #8a5a14,0 12px 26px #000c,0 0 40px #f5c45166}
+.res-title span{background:none !important;-webkit-background-clip:initial !important;background-clip:initial !important;color:inherit !important;-webkit-text-fill-color:inherit;padding:0 .02em}
+
+/* lobby: who's connected but still choosing */
+.lobby-choosing{position:absolute;left:60px;right:60px;bottom:150px;display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 18px;border-radius:16px;background:#071634dd;border:2px dashed #f5c45177;font:800 22px Inter;color:var(--gold2);z-index:3}
+.lobby-choosing .ico{width:26px;height:26px}
+.lobby-choosing .chip{font-size:19px;padding:4px 14px}
+
+/* fast money: top-answer callout + third column */
+.fm-cell.top{position:relative;overflow:visible}
+.fm-cell.top::after{content:"TOP ANSWER";position:absolute;right:110px;top:-12px;padding:2px 10px;border-radius:999px;font:900 13px Inter;letter-spacing:.12em;color:#3d2400;background:var(--metal);box-shadow:0 0 16px #ffe7a3;animation:popIn .5s cubic-bezier(.2,1.8,.4,1) both}
+.fm-board.tops .fm-row,.fm-board.tops .fm-heads{grid-template-columns:1fr 1fr 1fr}
+.fm-board.tops .fm-cell span{font-size:28px}
+.fm-cell.topans{background:linear-gradient(180deg,#fff3c4,#f5c451);border:3px solid #fff;color:#3d2400}
+.fm-cell.topans b{background:linear-gradient(180deg,#d6a030,#8a5a14)}
+
+.chip.away{opacity:.45;border-style:dashed}
+
+/* team name sits fully inside its panel */
+.pod{padding:10px 26px;grid-template-rows:46px minmax(0,1fr);align-items:start;align-content:start}
+.pod-name{font-size:34px;line-height:46px;height:46px}
+.pod-score{height:82px;align-self:center}
+.pod-score span{font-size:66px}
+.pod-roster{align-self:center}
+.pod.lit{transform:scale(1.03)}

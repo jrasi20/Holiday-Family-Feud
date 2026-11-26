@@ -23,14 +23,22 @@ export class Room {
     this.conns = new Map();      // pid -> {conn, role, name, team}
     this.onPlayers = onPlayers; this.onMessage = onMessage; this.onStatus = onStatus;
     this.status = "off";
-    // heartbeat: WebRTC can take 30s to notice a vanished phone; phones ping every 3s, silence > 9s = gone
+    // Heartbeat both ways. A locked phone goes silent: we mark it "away" but KEEP its seat
+    // (players 45s, host remote 12s) so it slips straight back in when the phone wakes.
     setInterval(() => {
       const now = Date.now(); let changed = false;
-      for (const [pid, c] of this.conns) if (now - (c.seen || 0) > 9000) { try { c.conn.close(); } catch {} this.conns.delete(pid); changed = true; }
+      for (const [pid, c] of this.conns) {
+        const quiet = now - (c.seen || 0);
+        if (c.open && quiet > 9000) { c.open = false; c.awaySince = now; try { c.conn.close(); } catch {} changed = true; }
+        const grace = c.role === "host" ? 12000 : 45000;
+        if (!c.open && now - (c.awaySince || 0) > grace) { this.conns.delete(pid); changed = true; }
+        if (c.open && c.conn.open) { try { c.conn.send({ t: "ping" }); } catch {} }
+      }
       if (changed) this.onPlayers?.(this.players);
-    }, 2000);
+    }, 3000);
   }
-  get players() { return [...this.conns.values()].filter(c => c.role === "player" && c.open).map(({ pid, name, team }) => ({ pid, name, team })); }
+  /* players include anyone briefly away (locked phone) so turns and teams don't reshuffle */
+  get players() { return [...this.conns.values()].filter(c => c.role === "player").map(({ pid, name, team, open }) => ({ pid, name, team, away: !open })); }
   get hostRemote() { return [...this.conns.values()].some(c => c.role === "host" && c.open); }
 
   open(preferred) {
@@ -65,7 +73,8 @@ export class Room {
         const role = msg.role === "host" && msg.key === this.key ? "host" : "player";
         const old = this.conns.get(msg.pid);
         if (old && old.conn !== conn) { try { old.conn.close(); } catch {} }
-        this.conns.set(msg.pid, { pid: msg.pid, conn, role, name: (msg.name || "Player").slice(0, 14), team: msg.team === 1 ? 1 : msg.team === 0 ? 0 : null, open: true, seen: Date.now() });
+        const team = msg.team === 1 ? 1 : msg.team === 0 ? 0 : (old?.team ?? null);   // returning phone keeps its team
+        this.conns.set(msg.pid, { pid: msg.pid, conn, role, name: (msg.name || old?.name || "Player").slice(0, 14), team, open: true, seen: Date.now() });
         this.onPlayers?.(this.players);
         this.onMessage?.({ ...msg, role }, msg.pid);
         return;
@@ -78,8 +87,8 @@ export class Room {
       if (msg.t === "name") { c.name = String(msg.name || "Player").slice(0, 14); this.onPlayers?.(this.players); }
       this.onMessage?.({ ...msg, role: c.role }, msg.pid);
     });
-    const drop = () => {
-      for (const [pid, c] of this.conns) if (c.conn === conn) { c.open = false; this.conns.delete(pid); }
+    const drop = () => {   // connection closed: hold the seat (heartbeat removes it after the grace period)
+      for (const c of this.conns.values()) if (c.conn === conn && c.open) { c.open = false; c.awaySince = Date.now(); }
       this.onPlayers?.(this.players);
     };
     conn.on("close", drop); conn.on("error", drop);
@@ -102,8 +111,24 @@ export class Client {
     Object.assign(this, { code, role, key, onState, onStatus, onMessage });
     // one identity per browser tab: survives a refresh (reconnects as the same player), never shared between tabs
     this.pid = (() => { try { let p = sessionStorage.getItem("css-pid"); if (!p) { p = makeKey() + makeKey(); sessionStorage.setItem("css-pid", p); } return p; } catch { return makeKey() + makeKey(); } })();
-    this.name = ""; this.team = null; this.conn = null; this.peer = null; this.retry = 0;
-    setInterval(() => this.send({ t: "ping" }), 3000);   // keeps our seat on the TV
+    this.name = ""; this.team = null; this.conn = null; this.peer = null; this.retry = 0; this.lastHeard = Date.now();
+    setInterval(() => {
+      this.send({ t: "ping" });                                   // keeps our seat on the TV
+      // TV pings every 3s: silence while "open" means the link died (phone slept, Wi-Fi switched)
+      if (this.conn?.open && Date.now() - this.lastHeard > 9000) this.reconnectNow();
+    }, 3000);
+    const wake = () => { if (document.hidden) return; if (!this.conn?.open || Date.now() - this.lastHeard > 4000) this.reconnectNow(); };
+    document.addEventListener("visibilitychange", wake);
+    addEventListener("pageshow", wake);
+    addEventListener("online", wake);
+  }
+  /* throw away the old link and join again as the same player (same pid, name, team) */
+  reconnectNow() {
+    clearTimeout(this._rt); clearTimeout(this._wd);
+    try { this.conn?.close(); } catch {}
+    try { this.peer?.destroy(); } catch {}
+    this.conn = null; this.peer = null; this.retry = 0; this.lastHeard = Date.now();
+    this.connect();
   }
   connect() {
     if (!peerLib()) { this.onStatus?.("unavailable"); return; }
@@ -133,8 +158,13 @@ export class Client {
       try { this.conn?.close(); } catch {}
       const conn = peer.connect(PREFIX + this.code, { reliable: true });
       this.conn = conn;
-      conn.on("open", () => { if (conn !== this.conn) return; clearTimeout(this._wd); this.retry = 0; this.onStatus?.("connected"); this.hello(); });
-      conn.on("data", raw => { const m = typeof raw === "string" ? JSON.parse(raw) : raw; if (m.t === "state") this.onState?.(m); else this.onMessage?.(m); });
+      conn.on("open", () => { if (conn !== this.conn) return; clearTimeout(this._wd); this.retry = 0; this.lastHeard = Date.now(); this.onStatus?.("connected"); this.hello(); });
+      conn.on("data", raw => {
+        this.lastHeard = Date.now();
+        const m = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (m.t === "ping") return;
+        if (m.t === "state") this.onState?.(m); else this.onMessage?.(m);
+      });
       conn.on("close", () => { if (conn !== this.conn) return; this.onStatus?.("lost"); this.scheduleRetry(); });
     };
     if (peer.open) go(); else peer.once("open", go);
