@@ -1,5 +1,5 @@
-﻿const CACHE = "bible-showdown-v5";
-const CORE = ["./", "./index.html", "./play.html", "./css/tv.css?v=5", "./css/phone.css?v=5", "./js/app.js?v=5", "./js/phone.js?v=5", "./js/net.js", "./js/data.js", "./js/audio.js", "./js/fx.js", "./assets/cover.jpg", "./assets/cover-wide.jpg", "./assets/logo-title.webp", "./assets/stage-bg.jpg", "./manifest.webmanifest"];
+﻿const CACHE = "bible-showdown-v6";
+const CORE = ["./", "./index.html", "./play.html", "./css/tv.css?v=6", "./css/phone.css?v=6", "./js/app.js?v=6", "./js/phone.js?v=6", "./js/net.js", "./js/match.js", "./js/data.js", "./js/audio.js", "./js/fx.js", "./assets/cover.jpg", "./assets/cover-wide.jpg", "./assets/logo-title.webp", "./assets/stage-bg.jpg", "./manifest.webmanifest"];
 
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE).catch(() => {}))); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));

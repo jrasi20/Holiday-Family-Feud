@@ -31,7 +31,8 @@ function connect() {
   client = new Client({
     code, role, key: hostKey,
     onStatus: s => { link = s; render(); },
-    onState: s => { const prev = state; state = s; react(prev, s); render(); }
+    onState: s => { const prev = state; state = s; react(prev, s); if (!s.answer) sent = false; render(); },
+    onMessage: m => { if (m.t === "result") showResult(m); }
   });
   client.name = store.get("name", "");
   client.team = store.get("team-" + code, null);
@@ -82,7 +83,10 @@ function renderTeam() {
 function renderPlayer() {
   const s = state || {};
   const team = s.team, teams = s.teams || ["", ""];
+  // keep whatever the player is typing across live updates
+  const prevBox = $("#ans"), typed = prevBox?.value || "", hadFocus = document.activeElement === prevBox;
   app.className = `screen player ${team === 0 ? "t0" : team === 1 ? "t1" : ""} tone-${s.tone || "idle"}`;
+  if (s.answer) return renderAnswer(s, teams, typed, hadFocus);
   const btn = s.buzz === "ready" ? `<button class="buzzer live" id="bz"><span>BUZZ!</span></button>`
     : s.buzz === "won" ? `<div class="buzzer won"><span>FIRST!</span></div>`
     : s.buzz === "lost" ? `<div class="buzzer lost"><span>Too slow</span></div>`
@@ -98,6 +102,75 @@ function renderPlayer() {
   $("#sw").onclick = () => { store.set("team-" + code, null); client.team = null; state = { ...state, team: null }; renderTeam(); };
 }
 
+/* ---------- answering: type it or say it ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let sent = false, listening = false, recog = null;
+function renderAnswer(s, teams, typed, hadFocus) {
+  app.innerHTML = `
+    <header class="p-top"><div class="me"><small>${esc(teams[s.team] || "")}</small><b>${esc(s.name || "")}</b></div>
+      <div class="mini-score"><span class="s0">${s.scores?.[0] ?? 0}</span><span class="s1">${s.scores?.[1] ?? 0}</span></div></header>
+    <p class="status">${esc(sent || s.pending ? "Survey says…" : s.status)}</p>
+    <div class="ans-q">${esc(s.q || "")}</div>
+    <form id="af" class="ans-form ${sent || s.pending ? "waiting" : ""}" autocomplete="off">
+      <input id="ans" maxlength="60" placeholder="Type your answer" value="${esc(typed)}" ${sent || s.pending ? "disabled" : ""} enterkeyhint="send" autocapitalize="sentences" spellcheck="false">
+      <div class="ans-row">
+        ${SR ? `<button type="button" id="mic" class="mic-btn ${listening ? "on" : ""}" ${sent || s.pending ? "disabled" : ""}><svg class="mic-ico" viewBox="0 0 24 24"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><b>${listening ? "Listening…" : "Say it"}</b></button>` : ""}
+        <button class="send-btn" ${sent || s.pending ? "disabled" : ""}>${sent || s.pending ? "Checking…" : "Send ▶"}</button>
+      </div>
+    </form>
+    <footer class="p-foot">${linkLine()}</footer>`;
+  const box = $("#ans");
+  if (hadFocus && !sent) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+  $("#af").onsubmit = e => { e.preventDefault(); sendAnswer(box.value); };
+  $("#mic")?.addEventListener("click", toggleMic);
+}
+function sendAnswer(text) {
+  text = String(text || "").trim();
+  if (!text || sent) return;
+  unlock();
+  if (client.send({ t: "answer", text })) { sent = true; vib(40); beep(520, 780, 0.12, "triangle", 0.1); render(); }
+}
+function toggleMic() {
+  unlock();
+  if (!SR) return;
+  if (listening) { try { recog?.stop(); } catch {} return; }
+  recog = new SR(); recog.lang = "en-US"; recog.interimResults = true; recog.maxAlternatives = 3;
+  recog.onresult = ev => {
+    const r = ev.results[ev.results.length - 1], text = r[0].transcript;
+    const box = $("#ans"); if (box) box.value = text;
+    if (r.isFinal) { listening = false; sendAnswer(text); }
+  };
+  recog.onend = () => { listening = false; render(); };
+  recog.onerror = e => { listening = false; if (e.error === "not-allowed") alert("Please allow the microphone, or type your answer."); render(); };
+  listening = true; vib(30); render();
+  try { recog.start(); } catch { listening = false; render(); }
+}
+
+/* ---------- CORRECT / INCORRECT result screen ---------- */
+const sfx = {};
+function playFile(name) { try { (sfx[name] ||= new Audio(`assets/audio/${name}.mp3`)); sfx[name].currentTime = 0; sfx[name].play().catch(() => {}); } catch {} }
+function showResult(m) {
+  sent = false;
+  const el = document.createElement("div");
+  if (m.kind === "correct") {
+    el.className = "result ok";
+    el.innerHTML = `<div class="r-ico">✓</div><b>${m.top ? "TOP ANSWER!" : "CORRECT!"}</b><span>${esc(m.answer)}</span><em>+${m.pts}</em>`;
+    playFile(m.top ? "top" : "reveal"); vib([60, 40, 160]);
+  } else if (m.kind === "wrong") {
+    el.className = "result bad";
+    el.innerHTML = `<div class="r-ico">✕</div><b>INCORRECT</b>${m.text ? `<span>“${esc(m.text)}”</span>` : ""}<small>${esc(m.msg || "Not on the board")}</small>
+      <div class="r-strikes">${Array.from({ length: Math.max(1, Math.min(3, m.strikes || 1)) }, () => "<i>✕</i>").join("")}</div><em>Strike ${m.strikes || 1}</em>`;
+    playFile("incorrect"); vib([200, 80, 200]);
+  } else {
+    el.className = "result again";
+    el.innerHTML = `<div class="r-ico">↻</div><b>Try again!</b><small>${esc(m.msg || "")}</small>`;
+    vib(60);
+  }
+  document.body.appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, m.kind === "again" ? 1500 : 2600);
+  render();
+}
+
 function renderHost() {
   const s = state || {};
   app.className = "screen host";
@@ -108,8 +181,9 @@ function renderHost() {
     body = `<div class="h-score"><span class="s0">${esc(s.teams[0])} <b>${s.scores[0]}</b></span><span class="bank">Bank <b>${s.bank}</b> ×${s.mult}</span><span class="s1">${esc(s.teams[1])} <b>${s.scores[1]}</b></span></div>
       <p class="h-prompt">${esc(s.prompt)}</p>
       <div class="h-q">R${s.round}/${s.rounds} · ${esc(s.q)}</div>
-      <div class="h-answers">${s.answers.map((a, i) => `<button class="h-ans ${a.r ? "done" : ""}" data-a="reveal" data-v="${i}" ${a.r || !s.canReveal || s.pending ? "disabled" : ""}><em>${i + 1}</em><span>${esc(a.t)}</span><b>${a.p}</b></button>`).join("")}</div>
-      ${s.canReveal ? `<button class="h-strike" data-a="strike" ${s.pending ? "disabled" : ""}>✕ NOT ON THE BOARD</button><p class="muted small">${"✕".repeat(s.strikes)}${"·".repeat(Math.max(0, 3 - s.strikes))} strikes</p>` : ""}`;
+      <div class="h-answers">${s.answers.map((a, i) => `<button class="h-ans ${a.r ? "done" : ""}" data-a="reveal" data-v="${i}" ${a.r || !s.canReveal || s.pending ? "disabled" : ""} title="${s.stage === "roundEnd" ? "Reveal on TV (no points)" : "Award this answer"}"><em>${i + 1}</em><span>${esc(a.t)}</span><b>${a.p}</b></button>`).join("")}</div>
+      ${s.stage === "roundEnd" ? `<p class="muted small">Tap answers to reveal them on the TV</p>` : ""}
+      ${s.canReveal && s.stage !== "roundEnd" ? `<button class="h-strike" data-a="strike" ${s.pending ? "disabled" : ""}>✕ NOT ON THE BOARD</button><p class="muted small">${"✕".repeat(s.strikes)}${"·".repeat(Math.max(0, 3 - s.strikes))} strikes</p>` : ""}`;
   } else if (s.screen === "fast" || s.screen === "arcade") {
     body = `<p class="h-prompt">${esc(s.prompt || "")}</p>${s.total !== undefined ? `<div class="h-score"><span class="bank">Total <b>${s.total}</b> / 200</span></div>` : ""}`;
   } else body = `<p class="h-prompt">${s.screen === "lobby" ? "Players are joining. Start when everyone's in!" : "Use the TV to choose a game."}</p>`;

@@ -2,14 +2,13 @@
 // SFX = mp3 buffers. Music = docs/assets/music/<track>.mp3 if present,
 // otherwise a built-in synthesized public-domain carol, so the game is never silent.
 
-const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown"];
+const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown","incorrect"];
 const VO = ["vo-survey-says","vo-top-answer","vo-steal","vo-fast-money","vo-winner","vo-round","vo-welcome","vo-congrats"];
 // music files are loudness-normalized to -16 LUFS, so these are true relative levels
 const MUSIC_VOL = { menu: 0.42, game: 0.26, round: 0.24, win: 0.5, fastmoney: 0.3 };
 
 let ctx = null, master, sfxBus, musicBus;
 const buffers = {};
-const musicFiles = {};       // track -> AudioBuffer | null (null = file missing)
 let musicNode = null, musicTrack = null, synthTimer = null;
 let sfxOn = true, musicOn = true;
 
@@ -25,7 +24,7 @@ const load = async (url) => {
 export const audio = {
   get ready() { return !!ctx; },
   setSfx(v) { sfxOn = v; },
-  setMusic(v) { musicOn = v; if (!v) stopMusic(); else if (musicTrack) { const t = musicTrack; musicTrack = null; this.music(t); } },
+  setMusic(v) { musicOn = v; if (!v) { stopMusic(); musicGen++; } else if (musicTrack) { const t = musicTrack; musicTrack = null; this.music(t); } },
 
   unlock() {
     if (!ctx) {
@@ -35,7 +34,7 @@ export const audio = {
       try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch {}
       master = ctx.createGain(); master.gain.value = 1; master.connect(ctx.destination);
       sfxBus = ctx.createGain(); sfxBus.gain.value = 0.9; sfxBus.connect(master);
-      musicBus = ctx.createGain(); musicBus.gain.value = 0.3; musicBus.connect(master);
+      musicBus = ctx.createGain(); musicBus.gain.value = 1; musicBus.connect(master);   // per-track level lives on each track's own gain
       SFX.forEach(n => load(`assets/audio/${n}.mp3`).then(b => { buffers[n] = b; }));
       VO.forEach(n => load(`assets/audio/${n}.mp3`).then(b => { buffers[n] = b; }));
       document.addEventListener("visibilitychange", () => {
@@ -71,13 +70,11 @@ export const audio = {
     [base, base * 1.5].forEach((f, i) => tone(f, t + i * 0.005, 0.45, "square", 0.12, 1400));
     vibrate(80);
   },
-  wrong() {                    // the classic harsh "X" buzzer
+  wrong() {                    // incorrect-answer buzzer (Jane's recording; synth only if it failed to load)
     if (!ctx) { vibrate([90, 50, 90]); return; }
     if (sfxOn) {
-      const t = ctx.currentTime;
-      tone(98, t, 0.75, "sawtooth", 0.22, 900);
-      tone(104, t, 0.75, "square", 0.12, 700);
-      this.play("strike", { vol: 0.7 });
+      if (buffers.incorrect) this.play("incorrect", { vol: 1 });
+      else { const t = ctx.currentTime; tone(98, t, 0.75, "sawtooth", 0.22, 900); tone(104, t, 0.75, "square", 0.12, 700); }
     }
     vibrate([120, 60, 120]);
   },
@@ -90,28 +87,40 @@ export const audio = {
     tone(660 * Math.pow(2, step / 12), ctx.currentTime, 0.25, "triangle", 0.12, 8000);
   },
 
+  // Exactly ONE music track at a time. Each request gets a generation number; a track that
+  // finishes loading after a newer request is discarded, and the old track fades out.
   music(track) {
-    if (musicTrack === track && (musicNode || synthTimer)) return;
+    if (musicTrack === track && (musicNode || synthTimer || loadingGen === musicGen)) return;
     stopMusic();
     musicTrack = track;
+    const gen = ++musicGen;
     if (!ctx || !musicOn || !track) return;
-    musicBus.gain.cancelScheduledValues(ctx.currentTime);
-    musicBus.gain.setValueAtTime(MUSIC_VOL[track] ?? 0.25, ctx.currentTime);
     const start = (buf) => {
-      if (musicTrack !== track) return;
+      if (gen !== musicGen) return;            // a newer track was requested meanwhile
+      loadingGen = -1;
       if (buf) {
-        const src = ctx.createBufferSource(); src.buffer = buf; src.loop = track !== "win";
-        src.connect(musicBus); src.start(); musicNode = src;
+        const src = ctx.createBufferSource(), g = ctx.createGain(), now = ctx.currentTime, v = MUSIC_VOL[track] ?? 0.25;
+        src.buffer = buf; src.loop = track !== "win";
+        g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(v, now + 0.8);   // fade in
+        src.connect(g).connect(musicBus); src.start();
+        musicNode = { src, g };
       } else startSynth(track);
     };
-    if (track in musicFiles) start(musicFiles[track]);
-    else load(`assets/music/${track}.mp3`).then(b => { musicFiles[track] = b; start(b); });
+    loadingGen = gen;
+    if (!musicLoads[track]) musicLoads[track] = load(`assets/music/${track}.mp3`);   // one download per track, ever
+    musicLoads[track].then(start);
   },
-  stopMusic() { stopMusic(); musicTrack = null; }
+  stopMusic() { stopMusic(); musicTrack = null; musicGen++; }
 };
+const musicLoads = {};
+let musicGen = 0, loadingGen = -1;
 
 function stopMusic() {
-  if (musicNode) { try { musicNode.stop(); } catch {} musicNode = null; }
+  if (musicNode) {                              // fade out over 0.7s, then stop
+    const { src, g } = musicNode, now = ctx.currentTime;
+    try { g.gain.cancelScheduledValues(now); g.gain.setValueAtTime(g.gain.value, now); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.7); src.stop(now + 0.75); } catch {}
+    musicNode = null;
+  }
   if (synthTimer) { clearInterval(synthTimer); synthTimer = null; }
 }
 function duck(to, secs) {

@@ -482,3 +482,29 @@ body.portrait-phone:not([data-screen="cover"]) #rotate-hint{display:flex}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}}
 
 .how .btn.xl{font-size:26px;padding:16px 40px}
+
+/* ---------- answers typed / spoken ---------- */
+.host-dock{gap:10px}
+.tv-answer{display:flex;align-items:center;gap:8px;padding:6px;border-radius:16px;background:#071634ee;border:2px solid #f5c45188;box-shadow:0 10px 26px #000a}
+.tv-answer input{width:380px;height:50px;padding:0 16px;border-radius:12px;border:2px solid #ffffff33;background:#000a;color:#fff;font:700 22px Inter;outline:none}
+.tv-answer input:focus{border-color:var(--gold)}
+.dbtn.mic{width:54px;padding:0;justify-content:center;background:#ffffff1c}
+.dbtn.mic .ico{width:26px;height:26px}
+.dbtn.mic.on{background:radial-gradient(circle,#ff5b6a,#a3101f);border-color:#fff;animation:pulse 1s infinite}
+.host-dock .remote-badge{position:static}
+.said-bubble{position:absolute;left:50%;top:470px;transform:translateX(-50%);z-index:6;display:flex;flex-direction:column;align-items:center;gap:4px;padding:22px 60px;border-radius:30px;
+  background:linear-gradient(180deg,#fffdf4,#f6e7bd) padding-box,var(--metal) border-box;border:6px solid transparent;color:#14214a;box-shadow:0 30px 80px #000e,0 0 60px #f5c45188;animation:saidIn .45s cubic-bezier(.2,1.5,.4,1) both;white-space:nowrap}
+.said-bubble::after{content:"";position:absolute;bottom:-22px;left:50%;margin-left:-20px;border:20px solid transparent;border-top-color:#e9b84a;border-bottom:0}
+.said-bubble small{font:800 20px Inter;letter-spacing:.2em;text-transform:uppercase;color:#a3172a}
+.said-bubble.t1 small{color:#0b7a4c}
+.said-bubble b{font:900 58px/1.05 Cinzel,serif}
+@keyframes saidIn{from{opacity:0;transform:translateX(-50%) scale(.5)}to{opacity:1;transform:translateX(-50%)}}
+.award-tally{display:flex;gap:16px;margin-top:10px}
+.award-tally span{font:800 24px Inter;padding:8px 18px;border-radius:12px;background:#0006}
+.award-tally b{font:700 30px Oswald;color:var(--gold2);margin-left:6px}
+.res-rounds{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;max-width:1300px;animation:slideUp .6s .9s both}
+.res-rounds span{font:700 19px Inter;padding:6px 14px;border-radius:999px;background:#0008;border:2px solid #ffffff22}
+.res-rounds span.t0{border-color:#ff8a95aa}.res-rounds span.t1{border-color:#6fe3b0aa}
+.res-rounds em{font-style:normal;font-weight:900;color:var(--gold);margin-right:8px}
+.res-rounds .mvp{display:inline-flex;align-items:center;gap:6px;color:#3d2400;background:linear-gradient(180deg,#fff1b8,#e3aa3c);border-color:#fff8}
+.res-rounds .mvp .ico{width:20px;height:20px}
