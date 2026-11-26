@@ -1,5 +1,5 @@
-﻿const CACHE = "bible-showdown-v4";
-const CORE = ["./", "./index.html", "./css/style.css?v=4", "./js/app.js?v=4", "./js/data.js", "./js/match.js", "./js/audio.js", "./js/fx.js", "./assets/cover.jpg", "./assets/cover-wide.jpg", "./assets/logo-title.webp", "./assets/stage-bg.jpg", "./manifest.webmanifest"];
+﻿const CACHE = "bible-showdown-v5";
+const CORE = ["./", "./index.html", "./play.html", "./css/tv.css?v=5", "./css/phone.css?v=5", "./js/app.js?v=5", "./js/phone.js?v=5", "./js/net.js", "./js/data.js", "./js/audio.js", "./js/fx.js", "./assets/cover.jpg", "./assets/cover-wide.jpg", "./assets/logo-title.webp", "./assets/stage-bg.jpg", "./manifest.webmanifest"];
 
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE).catch(() => {}))); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
@@ -8,7 +8,10 @@ self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  const isAsset = /\/assets\//.test(url.pathname) || url.host.includes("fonts.g");
+  const lib = url.host === "cdn.jsdelivr.net";
+  // never touch the room server or anything else off-site (live connections must stay live)
+  if (url.origin !== location.origin && !lib && !url.host.includes("fonts.g")) return;
+  const isAsset = lib || = /\/assets\//.test(url.pathname) || url.host.includes("fonts.g");
   if (isAsset) {
     // cache-first for images / audio / fonts (only cache successful responses, so missing optional files stay missing)
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {

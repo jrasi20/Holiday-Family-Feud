@@ -1,617 +1,763 @@
+// Christmas Bible Survey Showdown: TV / HOST SCREEN
+// The TV is a 1600x900 broadcast stage scaled to fit. Phones join by QR:
+// players get team buzzers, the host gets a private answer remote.
 import { SURVEY_BANK, FAST_MONEY_BANK, CHALLENGE_BANK, shuffle } from "./data.js";
-import { matchAnswer } from "./match.js";
 import { audio } from "./audio.js";
-import { startSnow, confetti, confettiRain, overlay, strikeFlash, countUp } from "./fx.js";
+import { startSnow, confetti, confettiRain, countUp } from "./fx.js";
+import { Room, joinUrl } from "./net.js";
 
-/* =========================================================
-   Storage + state
-   ========================================================= */
+/* ================= state ================= */
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem("css-" + k)); return v ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem("css-" + k, JSON.stringify(v)); } catch {} }
 };
-
-const DIFF = {
-  Easy:    { turn: 30, faceoff: 15, steal: 25, strikes: 3, label: "30-second turns · 3 strikes · letter hints" },
-  Classic: { turn: 20, faceoff: 10, steal: 20, strikes: 3, label: "20-second turns · 3 strikes" },
-  Expert:  { turn: 12, faceoff: 7,  steal: 15, strikes: 2, label: "12-second turns · only 2 strikes" }
-};
-const MAX_PLAYERS = 6;
-
 const S = {
-  teams: store.get("teams", [
-    { name: "Team Bethlehem", players: ["Player 1", "Player 2", "Player 3"] },
-    { name: "Team Nazareth", players: ["Player 1", "Player 2", "Player 3"] }
-  ]),
-  settings: Object.assign({ mode: "Teams", difficulty: "Classic", mix: "Mixed", rounds: 5, timer: true, sfx: true, music: true }, store.get("settings", {})),
-  rewards: Object.assign({ stars: 0, wins: 0, games: 0, fastWins: 0, bestSolo: 0, arcadeBest: 0, perfect: 0 }, store.get("rewards", {}))
+  teams: store.get("teams2", [{ name: "Bethlehem" }, { name: "Nazareth" }]),
+  settings: Object.assign({ rounds: 5, mix: "Mixed", timer: 0, sfx: true, music: true }, store.get("settings2", {}))
 };
-const save = () => { store.set("teams", S.teams); store.set("settings", S.settings); store.set("rewards", S.rewards); };
+const save = () => { store.set("teams2", S.teams); store.set("settings2", S.settings); };
 audio.setSfx(S.settings.sfx); audio.setMusic(S.settings.music);
+const STRIKES = 3;
 
-const root = document.getElementById("app");
-let screen = "cover";
+const stage = document.getElementById("scene-root");      // screens draw here
+const stageBox = document.getElementById("stage");       // the scaled 16:9 frame (shake target)
+const cardLayer = document.getElementById("card-layer");  // broadcast cards live above, untouched by redraws
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const solo = () => S.settings.mode === "Solo";
-const D = () => DIFF[S.settings.difficulty];
-const pName = (t, i) => { const p = S.teams[t].players; return p.length ? (p[((i % p.length) + p.length) % p.length] || `Player ${(i % p.length) + 1}`) : "Player"; };
-const tName = t => S.teams[t].name || `Team ${t + 1}`;
+const tName = t => S.teams[t]?.name?.trim() || (t ? "Team 2" : "Team 1");
+const wait = ms => new Promise(r => setTimeout(r, ms));
 
-/* =========================================================
-   Icons (inline SVG, crisp on every device, no emoji)
-   ========================================================= */
+/* ================= 16:9 stage scaling ================= */
+function fit() {
+  const s = Math.min(innerWidth / 1600, innerHeight / 900);
+  document.documentElement.style.setProperty("--s", s);
+  document.body.classList.toggle("portrait-phone", innerHeight > innerWidth && innerWidth < 700);
+}
+addEventListener("resize", fit); fit();
+
+/* ================= icons ================= */
 const I = {
   home: '<svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>',
   sound: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="ln" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="ln" d="M16.5 9.5l5 5M21.5 9.5l-5 5"/></svg>',
-  music: '<svg viewBox="0 0 24 24"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.8"/><circle cx="17.5" cy="16" r="2.8"/></svg>',
-  key: '<svg viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><path class="ln" d="M12 12h9M18 12v3.5M15.5 12v2.5"/></svg>',
-  star: '<svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 6.2 6.6.7-5 4.5 1.4 6.6L12 17.2l-5.9 3.3 1.4-6.6-5-4.5 6.6-.7z"/></svg>',
-  crown: '<svg viewBox="0 0 24 24"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/></svg>',
-  bolt: '<svg viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>',
-  quiz: '<svg viewBox="0 0 24 24"><circle class="ln" cx="12" cy="12" r="9.5"/><path class="ln" d="M9.3 9.2a2.8 2.8 0 1 1 3.9 2.6c-.8.4-1.2 1-1.2 1.9v.6"/><circle cx="12" cy="17.3" r="1.2"/></svg>',
-  info: '<svg viewBox="0 0 24 24"><circle class="ln" cx="12" cy="12" r="9.5"/><path class="ln" d="M12 11v6"/><circle cx="12" cy="7.5" r="1.3"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>',
-  x: '<svg viewBox="0 0 24 24"><path class="ln" d="M6 6l12 12M18 6L6 18"/></svg>',
-  plus: '<svg viewBox="0 0 24 24"><path class="ln" d="M12 5v14M5 12h14"/></svg>',
-  edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
-  trophy: '<svg viewBox="0 0 24 24"><path d="M7 3h10v5a5 5 0 0 1-10 0z"/><path class="ln" d="M7 5H3.5a3.5 3.5 0 0 0 4 4.5M17 5h3.5a3.5 3.5 0 0 1-4 4.5M12 13v4M8 21h8M9.5 17h5"/></svg>'
+  star: '<svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 6.2 6.6.7-5 4.5 1.4 6.6L12 17.2l-5.9 3.3 1.4-6.6-5-4.5 6.6-.7z"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>',
+  book: '<svg viewBox="0 0 24 24"><path d="M3 5.5C5.5 4 8.5 4 11.2 5.6V20c-2.7-1.6-5.7-1.6-8.2-.1zM12.8 5.6C15.5 4 18.5 4 21 5.5v14.4c-2.5-1.5-5.5-1.5-8.2.1z"/></svg>',
+  info: '<svg viewBox="0 0 24 24"><circle class="ln" cx="12" cy="12" r="9.5"/><path class="ln" d="M12 11v6"/><circle cx="12" cy="7.5" r="1.3"/></svg>',
+  phone: '<svg viewBox="0 0 24 24"><rect class="ln" x="6.5" y="2.5" width="11" height="19" rx="2.5"/><circle cx="12" cy="18" r="1.1"/></svg>',
+  key: '<svg viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><path class="ln" d="M12 12h9M18 12v3.5M15.5 12v2.5"/></svg>',
+  crown: '<svg viewBox="0 0 24 24"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/></svg>',
+  x: '<svg viewBox="0 0 24 24"><path class="ln" d="M6 6l12 12M18 6L6 18"/></svg>'
 };
-const icon = (n, cls = "") => `<i class="ico ${cls}">${I[n]}</i>`;
+const icon = (n, c = "") => `<i class="ico ${c}">${I[n]}</i>`;
 
-function topBar(title, sub = "") {
-  return `<header class="topbar">
-    <button class="round-btn" data-act="home" aria-label="Menu">${icon("home")}</button>
-    <div class="topbar-title"><span class="eyebrow">Christmas Bible Survey Showdown</span><h1>${title}</h1></div>
-    ${sub ? `<span class="topbar-sub">${sub}</span>` : ""}
-    <div class="topbar-tools">
-      <button class="round-btn ${S.settings.music ? "" : "off"}" data-act="toggleMusic" aria-label="Music">${icon("music")}</button>
-      <button class="round-btn ${S.settings.sfx ? "" : "off"}" data-act="toggleSfx" aria-label="Sound effects">${icon(S.settings.sfx ? "sound" : "mute")}</button>
-    </div>
-  </header>`;
-}
-
-/* =========================================================
-   Router + global events
-   ========================================================= */
+/* ================= router + history (back button stays in the game) ================= */
 const screens = {};
-function go(name, ...args) {
+let screen = null, freshScene = false;
+function go(name, arg, { push = true } = {}) {
   stopClock();
+  freshScene = true;
   screen = name;
   document.body.dataset.screen = name;
-  screens[name].enter?.(...args);
-  screens[name].render();
-  window.scrollTo(0, 0);
+  screens[name].enter?.(arg);
+  render();
+  if (push) history.pushState({ screen: name }, "");
 }
-const render = () => screens[screen].render();
+function render() {
+  screens[screen].render();
+  // entrance animations play once per screen/round, never on ordinary updates
+  if (freshScene) { stage.querySelector(".scene")?.classList.add("enter"); freshScene = false; }
+  syncPhones();
+}
+addEventListener("popstate", () => {
+  if (["survey", "fast", "arcade"].includes(screen)) {
+    history.pushState({ screen }, "");            // stay; ask first
+    confirmLeave();
+  } else if (screen === "lobby" || screen === "how" || screen === "results") go("home", null, { push: false });
+  else if (screen === "home") go("cover", null, { push: false });
+});
+function confirmLeave() {
+  card(`<div class="card-confirm"><h2>Leave this game?</h2><p>Scores for this game will be lost.</p>
+    <div class="row"><button class="btn gold" data-act="closeCard">Keep playing</button><button class="btn red" data-act="leaveGame">Leave game</button></div></div>`, "confirm", 0);
+}
 
+/* ================= click + key dispatch ================= */
 const actions = {};
-root.addEventListener("click", e => {
+document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]");
   if (!el || el.disabled) return;
+  audio.unlock();
   const fn = actions[el.dataset.act];
-  if (fn) { audio.unlock(); fn(el, e); }
+  if (fn) fn(el.dataset.v, el);
 });
-root.addEventListener("input", e => { const el = e.target; if (el.dataset.bind) bind(el); });
-root.addEventListener("submit", e => {
-  e.preventDefault();
-  const f = e.target; const fn = actions[f.dataset.submit];
-  if (fn) fn(f);
+stage.addEventListener("input", e => {
+  const el = e.target;
+  if (el.dataset.team !== undefined) { S.teams[+el.dataset.team].name = el.value.slice(0, 18); save(); syncPhones(); }
 });
-document.addEventListener("keydown", e => screens[screen].key?.(e));
-
-let homeArmed = 0;
-actions.home = el => {
-  const inGame = ["survey", "fast", "arcade"].includes(screen);
-  if (inGame && Date.now() - homeArmed > 2500) {   // two-tap guard so a stray tap can't end the game
-    homeArmed = Date.now(); el.classList.add("armed"); el.title = "Tap again to leave the game";
-    audio.play("pop");
-    setTimeout(() => el.classList.remove("armed"), 2500);
-    return;
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  const k = e.key.toLowerCase();
+  if (screen === "survey" && G) {
+    if (G.stage === "faceoff" && (k === "a" || k === "l")) return act("buzz", k === "a" ? 0 : 1);
+    if (/^[1-6]$/.test(k)) return act("reveal", +k - 1);
+    if (k === "x") return act("strike");
+    if (k === " " || k === "enter") { const c = hostControls().find(c => c.main); if (c) { e.preventDefault(); act(c.a, c.v); } }
   }
-  homeArmed = 0; audio.play("page"); go("menu");
-};
-actions.toggleSfx = () => { S.settings.sfx = !S.settings.sfx; audio.setSfx(S.settings.sfx); save(); render(); };
+});
+
+actions.closeCard = () => closeCard();
+actions.leaveGame = () => { closeCard(); audio.play("page"); go("home"); };
+actions.home = () => { if (["survey", "fast", "arcade"].includes(screen)) confirmLeave(); else { audio.play("page"); go("home"); } };
+actions.toggleSfx = () => { S.settings.sfx = !S.settings.sfx; audio.setSfx(S.settings.sfx); save(); render(); if (S.settings.sfx) audio.play("reveal"); };
 actions.toggleMusic = () => { S.settings.music = !S.settings.music; audio.setMusic(S.settings.music); save(); render(); };
 
-let wakeLock = null;
-async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
-document.addEventListener("visibilitychange", () => { if (!document.hidden && wakeLock) keepAwake(); });
+/* ================= broadcast cards (the TV "modals") ================= */
+let cardEl = null, cardTimer = null;
+function card(html, kind, ms = 1800) {
+  closeCard(true);
+  const el = document.createElement("div");
+  el.className = `bcard bcard-${kind}`;
+  el.innerHTML = `<div class="bcard-dim"></div><div class="bcard-body">${html}</div>`;
+  cardLayer.appendChild(el);
+  cardEl = el;
+  return new Promise(res => {
+    if (!ms) { el._res = res; return; }
+    cardTimer = setTimeout(() => { closeCard(); res(); }, ms);
+  });
+}
+function closeCard(instant) {
+  clearTimeout(cardTimer);
+  if (!cardEl) return;
+  const el = cardEl; cardEl = null;
+  el._res?.();
+  if (instant) { el.remove(); return; }
+  el.classList.add("out"); setTimeout(() => el.remove(), 380);
+}
 
-/* One shared countdown clock */
+/* ================= clock ================= */
 let clock = null;
 const T = { left: 0, max: 0, on: false, onEnd: null };
 function setTimer(secs, onEnd, force = false) {
   stopClock();
-  if (!S.settings.timer && !force) { T.on = false; T.left = 0; T.max = 0; patchTimer(); return; }
+  if (!secs || (!S.settings.timer && !force)) { Object.assign(T, { on: false, max: 0, left: 0 }); patchTimer(); return; }
   Object.assign(T, { left: secs, max: secs, on: true, onEnd });
   patchTimer();
   clock = setInterval(() => {
-    if (!T.on) return;
     T.left--;
     if (T.left <= 5 && T.left > 0) audio.tick(T.left <= 3);
     patchTimer();
-    if (T.left <= 0) { stopClock(); audio.play("timeup"); T.onEnd && T.onEnd(); }
+    if (T.left <= 0) { stopClock(); audio.play("timeup"); T.onEnd?.(); }
   }, 1000);
 }
-function stopClock() { if (clock) clearInterval(clock); clock = null; T.on = false; }
-function timerHTML() {
-  const on = S.settings.timer && T.max > 0;
-  const k = on ? Math.max(0, T.left / T.max) : 1;
-  return `<div class="timer-ring ${on && T.left <= 5 ? "urgent" : ""} ${on ? "" : "idle"}" id="timer">
-    <svg viewBox="0 0 44 44"><circle class="track" cx="22" cy="22" r="19"/><circle class="bar" cx="22" cy="22" r="19" style="stroke-dashoffset:${(119.4 * (1 - k)).toFixed(1)}"/></svg>
-    <b>${on ? T.left : "∞"}</b></div>`;
+function stopClock() { clearInterval(clock); clock = null; T.on = false; }
+const timerHTML = () => {
+  if (!T.max) return "";
+  const k = Math.max(0, T.left / T.max);
+  return `<div class="clock ${T.left <= 5 ? "urgent" : ""}" id="clock"><svg viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="44"/><circle class="bar" cx="50" cy="50" r="44" style="stroke-dashoffset:${(276.5 * (1 - k)).toFixed(1)}"/></svg><b>${T.left}</b></div>`;
+};
+function patchTimer() { const el = document.getElementById("clock"); if (el) el.outerHTML = timerHTML(); else if (T.max) document.getElementById("clockSlot")?.insertAdjacentHTML("beforeend", timerHTML()); }
+
+/* ================= phones / room ================= */
+let room = null, roster = [], linkStatus = "off", lastRemote = false;
+function ensureRoom() {
+  if (room) return;
+  room = new Room({
+    onPlayers: p => {
+      const before = roster.length, hadRemote = lastRemote; roster = p; lastRemote = room.hostRemote;
+      if (p.length > before) audio.play("pop");
+      // redraw when players change in the lobby, or when the host remote comes/goes (TV host buttons hide/show)
+      if (screen === "lobby" || hadRemote !== lastRemote) render(); else syncPhones();
+    },
+    onStatus: s => { linkStatus = s; if (screen === "lobby") render(); },
+    onMessage: (m, pid) => onPhone(m, pid)
+  });
+  room.open();
 }
-function patchTimer() { const el = document.getElementById("timer"); if (el) el.outerHTML = timerHTML(); }
+const teamRoster = t => roster.filter(p => p.team === t);
+const remoteOn = () => !!room?.hostRemote;
 
-/* =========================================================
-   COVER
-   ========================================================= */
-let hasWide = false;
-{ const im = new Image(); im.onload = () => { hasWide = true; document.body.classList.add("has-wide"); }; im.src = "assets/cover-wide.jpg"; }
+function onPhone(m, pid) {
+  if (m.t === "hello") { syncPhones(); if (m.role === "host") { audio.play("star"); if (screen !== "lobby") render(); } return; }
+  if (m.t === "buzz" && screen === "survey" && G?.stage === "faceoff") {
+    const me = roster.find(p => p.pid === pid);
+    if (!me || me.team === null) return;
+    const fp = faceoffPlayer(me.team);
+    if (!fp || fp.pid === pid) buzz(me.team, pid);
+    return;
+  }
+  if (m.t === "act" && m.role === "host") act(m.a, m.v);
+}
 
+function syncPhones() {
+  if (!room) return;
+  room.broadcast((role, pid) => role === "host" ? hostView() : playerView(pid));
+}
+
+/* ================= HOME ================= */
 screens.cover = {
   render() {
-    root.innerHTML = `<main class="cover" data-act="enterGame">
-      <div class="cover-blur"></div>
-      <img class="cover-art" src="assets/cover.jpg" alt="Christmas Bible Survey Showdown">
-      <div class="cover-wide"></div>
-      <div class="cover-title"><img src="assets/logo-title.webp" alt="Christmas Bible Survey Showdown"></div>
-      <img class="brand-badge" src="assets/brand-logo.webp" alt="Bible Explorer Kids">
-      <div class="cover-cta">
-        <button class="btn-gold pulse" data-act="enterGame">${icon("play")} Tap to Begin</button>
-        <small>Sound on for the full show</small>
-      </div>
-      <footer class="cover-foot">© Bible Explorer Kids · Short Scripture phrases from the Holy Bible, NIV®. © 2011 Biblica, Inc.™ Used by permission. All rights reserved worldwide.</footer>
-    </main>`;
+    stage.innerHTML = "";
+    document.getElementById("cover").hidden = false;
   }
 };
 actions.enterGame = () => {
   audio.unlock();
   audio.play("magic");
   audio.music("menu");
-  setTimeout(() => audio.voice("vo-welcome"), 450);   // decoded right after unlock
-  confetti(60, { x: 0.5, y: 0.75 });
-  go(store.get("setupDone", false) ? "menu" : "setup");
+  setTimeout(() => audio.voice("vo-welcome"), 450);
+  document.getElementById("cover").hidden = true;
+  confetti(60, { x: 0.5, y: 0.8 });
+  go("home");
 };
 
-/* =========================================================
-   SETUP (teams, mode, difficulty)
-   ========================================================= */
-function bind(el) {
-  const [kind, a, b] = el.dataset.bind.split(".");
-  if (kind === "team") S.teams[+a].name = el.value.slice(0, 22);
-  if (kind === "player") S.teams[+a].players[+b] = el.value.slice(0, 16);
-  save();
-}
-const seg = (key, opts, labelFn = o => o) =>
-  `<div class="seg">${opts.map(o => `<button class="${String(S.settings[key]) === String(o) ? "on" : ""}" data-act="set" data-k="${key}" data-v="${o}">${labelFn(o)}</button>`).join("")}</div>`;
-
-screens.setup = {
+screens.home = {
+  enter() { document.getElementById("cover").hidden = true; audio.music("menu"); },
   render() {
-    const st = S.settings;
-    root.innerHTML = `<main class="page setup">
-      ${topBar("Set Up the Show")}
-      <section class="panel">
-        <h2 class="panel-h">Who's playing?</h2>
-        ${seg("mode", ["Teams", "Solo"], o => o === "Teams" ? "Two Teams" : "Solo Challenge")}
-        <div class="teams-edit ${st.mode === "Solo" ? "solo" : ""}">
-          ${S.teams.slice(0, st.mode === "Solo" ? 1 : 2).map((t, ti) => `
-          <div class="team-edit team-${ti}">
-            <label class="field"><span>${st.mode === "Solo" ? "Your name" : `Team ${ti + 1} name`}</span>
-              <input data-bind="team.${ti}" value="${esc(t.name)}" maxlength="22" placeholder="Team name"></label>
-            ${st.mode === "Solo" ? "" : `<div class="roster">
-              ${t.players.map((p, pi) => `<div class="roster-row"><em>${pi + 1}</em>
-                <input data-bind="player.${ti}.${pi}" value="${esc(p)}" maxlength="16" placeholder="Player ${pi + 1}">
-                <button class="mini" data-act="delPlayer" data-t="${ti}" data-p="${pi}" ${t.players.length <= 1 ? "disabled" : ""} aria-label="Remove">${icon("x")}</button></div>`).join("")}
-              ${t.players.length < MAX_PLAYERS ? `<button class="add-player" data-act="addPlayer" data-t="${ti}">${icon("plus")} Add player</button>` : ""}
-            </div>`}
-          </div>`).join("")}
+    stage.innerHTML = `
+    <div class="scene home">
+      ${rays()}
+      <img class="home-logo" src="assets/logo-title.webp" alt="Christmas Bible Survey Showdown">
+      <div class="home-btns">
+        <button class="mega" data-act="lobby" data-v="survey">
+          <span class="mega-shine"></span><span class="mega-ico">${icon("star")}</span>
+          <span class="mega-txt"><b>Play the Showdown</b><small>Two teams · buzzers · strikes · steals</small></span>
+          <span class="mega-go">${icon("play")}</span>
+        </button>
+        <div class="mini-row">
+          <button class="mini-btn" data-act="lobby" data-v="fast">${icon("bolt")}<b>Fast Money</b></button>
+          <button class="mini-btn" data-act="lobby" data-v="arcade">${icon("book")}<b>Bible Challenge</b></button>
+          <button class="mini-btn" data-act="how">${icon("info")}<b>How to Play</b></button>
         </div>
-      </section>
-      <section class="panel grid-2">
-        <div><h3>Difficulty</h3>${seg("difficulty", ["Easy", "Classic", "Expert"])}<small>${DIFF[st.difficulty].label}</small></div>
-        <div><h3>Questions</h3>${seg("mix", ["Mixed", "Bible", "Holiday"])}<small>${st.mix === "Bible" ? "Straight from the Christmas story" : st.mix === "Holiday" ? "Santa, cookies & family chaos" : "Scripture + holiday fun"}</small></div>
-        <div><h3>Rounds</h3>${seg("rounds", [3, 5, 7, 10])}<small>Points double, then triple in the final round</small></div>
-        <div><h3>Turn timer</h3>${seg("timer", ["true", "false"], o => o === "true" ? "On" : "Off")}<small>${st.timer ? "Clock runs out = strike" : "Host keeps time. Great for little ones"}</small></div>
-      </section>
-      <button class="btn-gold jumbo" data-act="setupDone">Save &amp; continue ${icon("play")}</button>
-    </main>`;
+      </div>
+      ${cornerTools()}
+      <img class="brand-corner" src="assets/brand-logo.webp" alt="Bible Explorer Kids">
+    </div>`;
   }
 };
-actions.set = el => {
-  let v = el.dataset.v; const k = el.dataset.k;
-  if (k === "rounds") v = +v; if (k === "timer") v = v === "true";
-  S.settings[k] = v; save(); audio.play("pop"); render();
-};
-actions.addPlayer = el => { const t = S.teams[+el.dataset.t]; if (t.players.length < MAX_PLAYERS) t.players.push(`Player ${t.players.length + 1}`); save(); render(); };
-actions.delPlayer = el => { const t = S.teams[+el.dataset.t]; if (t.players.length > 1) t.players.splice(+el.dataset.p, 1); save(); render(); };
-actions.setupDone = () => {
-  S.teams.forEach((t, i) => { t.name = t.name.trim() || `Team ${i + 1}`; t.players = t.players.map((p, j) => p.trim() || `Player ${j + 1}`); });
-  store.set("setupDone", true); save(); audio.play("whoosh"); go("menu");
-};
+const rays = () => `<div class="rays"></div><div class="bokeh"></div>`;
+const cornerTools = () => `<div class="corner-tools">
+  <button class="tool ${S.settings.music ? "" : "off"}" data-act="toggleMusic" title="Music">${icon("sound")}<span>Music</span></button>
+  <button class="tool ${S.settings.sfx ? "" : "off"}" data-act="toggleSfx" title="Sound effects">${icon(S.settings.sfx ? "sound" : "mute")}<span>Effects</span></button>
+  <button class="tool" data-act="settings" title="Settings">${icon("gear")}<span>Settings</span></button>
+</div>`;
+actions.how = () => { audio.play("page"); go("how"); };
 
-/* =========================================================
-   MENU
-   ========================================================= */
-screens.menu = {
-  enter() { audio.music("menu"); },
+/* ================= SETTINGS (one simple panel) ================= */
+actions.settings = () => {
+  const st = S.settings;
+  const seg = (k, opts) => `<div class="seg">${opts.map(([v, l]) => `<button class="${String(st[k]) === String(v) ? "on" : ""}" data-act="setOpt" data-v="${k}:${v}">${l}</button>`).join("")}</div>`;
+  card(`<div class="panel-card">
+    <h2>Game Settings</h2>
+    <label>Rounds${seg("rounds", [[3, "3 · Quick"], [5, "5 · Classic"], [7, "7 · Long"]])}</label>
+    <label>Questions${seg("mix", [["Mixed", "Mixed"], ["Bible", "Bible only"], ["Holiday", "Holiday fun"]])}</label>
+    <label>Answer timer${seg("timer", [[0, "Off"], [30, "Relaxed 30s"], [20, "Normal 20s"], [12, "Fast 12s"]])}</label>
+    <div class="row"><button class="btn ghost" data-act="testSound">${icon("sound")} Test sound</button><button class="btn gold" data-act="closeCard">Done</button></div>
+  </div>`, "panel", 0);
+};
+actions.setOpt = v => {
+  const [k, raw] = v.split(":");
+  S.settings[k] = k === "mix" ? raw : +raw; save(); audio.play("pop"); actions.settings();
+};
+actions.testSound = () => { audio.unlock(); audio.play("reveal"); setTimeout(() => audio.wrong(), 600); setTimeout(() => audio.voice("vo-survey-says"), 1500); };
+
+/* ================= LOBBY (QR join) ================= */
+let nextGame = "survey";
+const seenChips = new Set();   // so only newly joined players pop in
+actions.lobby = v => { nextGame = v || "survey"; audio.play("whoosh"); go("lobby"); };
+screens.lobby = {
+  enter() { ensureRoom(); audio.music("menu"); },
   render() {
-    const st = S.settings;
-    root.innerHTML = `<main class="page menu">
-      <div class="menu-hero">
-        <img class="logo-img" src="assets/logo-title.webp" alt="Christmas Bible Survey Showdown" onerror="this.remove()">
-        <div class="logo-text"><span>Christmas Bible</span><b>Survey Showdown</b></div>
-        <button class="matchup" data-act="editTeams">${st.mode === "Solo" ? `<b>${esc(tName(0))}</b> · Solo Challenge` : `<b class="t0">${esc(tName(0))}</b><i>VS</i><b class="t1">${esc(tName(1))}</b>`} ${icon("edit")}</button>
-        <p class="menu-meta">${st.difficulty} · ${st.rounds} rounds · ${st.mix} questions</p>
+    const ready = linkStatus === "ready" && room?.code;
+    const url = ready ? joinUrl(room.code) : "";
+    const hostUrl = ready ? joinUrl(room.code, room.key) : "";
+    const title = { survey: "Survey Showdown", fast: "Fast Money", arcade: "Bible Challenge" }[nextGame];
+    stage.innerHTML = `
+    <div class="scene lobby">
+      ${rays()}
+      <header class="lobby-head"><span class="kicker">Tonight's game</span><h1>${title}</h1></header>
+      <div class="lobby-grid">
+        ${[0, 1].map(t => `<section class="team-pod t${t}">
+          <span class="pod-label">Team ${t + 1}</span>
+          <input class="team-name" data-team="${t}" value="${esc(S.teams[t].name)}" maxlength="18" spellcheck="false" aria-label="Team ${t + 1} name">
+          <div class="pod-players">${teamRoster(t).map(p => { const isNew = !seenChips.has(p.pid + t); seenChips.add(p.pid + t); return `<span class="chip ${isNew ? "pop-in" : ""}">${esc(p.name)}</span>`; }).join("") || `<span class="pod-empty">Players join by scanning the code</span>`}</div>
+        </section>`).join("")}
+        <section class="join-card">
+          <span class="kicker">Grab a phone buzzer</span>
+          <div class="qr">${ready ? qrSvg(url) : `<div class="qr-wait">${linkStatus === "unavailable" ? "Phones can't connect right now. No problem: the host taps instead!" : "Opening the room…"}</div>`}</div>
+          ${ready ? `<div class="code-line">or visit <b>${esc(url.replace(/^https?:\/\//, "").replace(/\?.*$/, ""))}</b> · code <b class="code">${room.code}</b></div>` : ""}
+        </section>
       </div>
-      <button class="hero-card-btn" data-act="startSurvey">
-        <span class="marquee"></span>
-        ${icon("star", "big")}
-        <span><b>Start the Showdown</b><small>Face-offs · steals · strikes · double &amp; triple points</small></span>
-        <em>PLAY</em>
-      </button>
-      <div class="menu-cards">
-        <button class="menu-card" data-act="startFast">${icon("bolt")}<b>Fast Money</b><small>Two players · 5 rapid questions · reach 200</small></button>
-        <button class="menu-card" data-act="startArcade">${icon("quiz")}<b>Bible Challenge</b><small>Prophecy · Who Said It? · Which Came First?</small></button>
-        <button class="menu-card" data-act="howto">${icon("info")}<b>How to Play</b><small>Host guide in 60 seconds</small></button>
-        <button class="menu-card" data-act="rewards">${icon("trophy")}<b>Trophy Room</b><small>${S.rewards.stars} stars earned</small></button>
-      </div>
-      <footer class="tiny-foot">
-        <button class="linkish" data-act="toggleMusic">Music: ${st.music ? "On" : "Off"}</button> ·
-        <button class="linkish" data-act="toggleSfx">Sound effects: ${st.sfx ? "On" : "Off"}</button>
-        <img class="foot-logo" src="assets/brand-logo.webp" alt="Bible Explorer Kids">
-        <div>An original Bible Explorer Kids game, not affiliated with any TV show. Point values are for fun, not real survey results.</div>
+      <footer class="lobby-foot">
+        <div class="host-qr ${remoteOn() ? "linked" : ""}">
+          ${ready ? `<div class="qr small">${qrSvg(hostUrl)}</div>` : ""}
+          <div><b>${remoteOn() ? `${icon("key")} Host remote connected` : `${icon("key")} Host: scan for your secret answer remote`}</b>
+          <small>${remoteOn() ? "Answers stay on your phone. The TV shows only the show." : "Optional. Without it, the host taps answers on this screen."}</small></div>
+        </div>
+        <button class="btn gold xl pulse" data-act="startGame">${icon("play")} Start the show</button>
       </footer>
-    </main>`;
+      ${cornerTools()}
+      <button class="back-btn" data-act="home">${icon("home")}</button>
+    </div>`;
   }
 };
-actions.editTeams = () => { audio.play("page"); go("setup"); };
-actions.howto = () => { audio.play("page"); go("how"); };
-actions.rewards = () => { audio.play("page"); go("rewards"); };
+function qrSvg(text) {
+  if (!window.qrcode) return "";
+  const q = window.qrcode(0, "M"); q.addData(text); q.make();
+  return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+}
+actions.startGame = () => {
+  S.teams.forEach((t, i) => { t.name = (t.name || "").trim() || (i ? "Nazareth" : "Bethlehem"); }); save();
+  if (nextGame === "fast") return startFast();
+  if (nextGame === "arcade") return startArcade();
+  startSurvey();
+};
 
 /* =========================================================
    SURVEY SHOWDOWN
    ========================================================= */
 let G = null;
-
 function makeDeck(n) {
-  const pool = S.settings.mix === "Mixed" ? SURVEY_BANK : SURVEY_BANK.filter(x => x.category === S.settings.mix);
-  const recent = store.get("recent", []);
+  const mix = S.settings.mix, recent = store.get("recent", []);
+  const fresh = list => shuffle(list.filter(x => !recent.includes(x.id))).concat(shuffle(list.filter(x => recent.includes(x.id))));
   let deck;
-  if (S.settings.mix === "Mixed") {   // alternate Bible / Holiday for rhythm
-    const bib = shuffle(pool.filter(x => x.category === "Bible" && !recent.includes(x.id))).concat(shuffle(pool.filter(x => x.category === "Bible" && recent.includes(x.id))));
-    const hol = shuffle(pool.filter(x => x.category === "Holiday" && !recent.includes(x.id))).concat(shuffle(pool.filter(x => x.category === "Holiday" && recent.includes(x.id))));
+  if (mix === "Mixed") {
+    const bib = fresh(SURVEY_BANK.filter(x => x.category === "Bible")), hol = fresh(SURVEY_BANK.filter(x => x.category === "Holiday"));
     const first = Math.random() < 0.5;
     deck = Array.from({ length: n }, (_, i) => ((i % 2 === 0) === first ? bib : hol).shift() || bib.shift() || hol.shift());
-  } else {
-    deck = shuffle(pool.filter(x => !recent.includes(x.id))).concat(shuffle(pool.filter(x => recent.includes(x.id)))).slice(0, n);
-  }
+  } else deck = fresh(SURVEY_BANK.filter(x => x.category === mix)).slice(0, n);
   store.set("recent", [...recent, ...deck.map(x => x.id)].slice(-30));
   return deck;
 }
 const multFor = (i, n) => (n >= 3 && i === n - 1) ? 3 : (i >= Math.floor(n / 2) ? 2 : 1);
+const faceoffPlayer = t => { const r = teamRoster(t); return r.length ? r[(G.ri + G.fo.retry) % r.length] : null; };
+const turnPlayer = t => { const r = teamRoster(t); return r.length ? r[G.ptr[t] % r.length] : null; };
 
-actions.startSurvey = () => {
-  audio.play("gong");
-  keepAwake();
-  const n = S.settings.rounds;
-  G = { deck: makeDeck(n), ri: 0, scores: [0, 0], shown: { scores: [0, 0], bank: 0 }, ptr: [0, 0] };
-  stopClock(); screen = "survey"; document.body.dataset.screen = "survey"; window.scrollTo(0, 0);
-  beginRound();
-};
+function startSurvey() {
+  audio.play("gong"); keepAwake();
+  G = { deck: makeDeck(S.settings.rounds), ri: 0, scores: [0, 0], shown: { scores: [0, 0], bank: 0 }, ptr: [0, 0] };
+  beginRound(true);
+}
+screens.survey = { render: () => renderSurvey() };
 
-function beginRound() {
+async function beginRound(first = false) {
   const r = G.deck[G.ri];
-  Object.assign(G, {
-    round: r, mult: multFor(G.ri, G.deck.length), revealed: [], fresh: new Set(), bank: 0, strikes: 0,
-    control: solo() ? 0 : null, stage: "intro", fo: { order: null, step: 0, res: [], retry: 0 }, msg: "", hint: null, stolen: false, hostKey: false
-  });
+  Object.assign(G, { round: r, mult: multFor(G.ri, G.deck.length), revealed: [], fresh: new Set(), bank: 0, strikes: 0, control: null,
+    stage: "intro", fo: { order: null, step: 0, res: [], retry: 0, winner: null, buzzPid: null }, msg: "", stolen: false, pending: false, awardMsg: "", peek: false });
   G.shown.bank = 0;
-  render();
-  audio.music(G.mult > 1 ? "round" : "game");   // music lifts when points double
+  if (first) go("survey"); else { freshScene = true; render(); }   // state is complete before the first draw
+  audio.music(G.mult > 1 ? "round" : "game");
   audio.play("timpani");
-  const m = G.mult, last = G.ri === G.deck.length - 1;
-  overlay(`<div class="round-splash"><small>${last ? "Final Round" : `Round ${G.ri + 1} of ${G.deck.length}`}</small><h2>${m === 1 ? "Single Points" : m === 2 ? "Double Points" : "Triple Points"}</h2><div class="mult">×${m}</div><p>${esc(r.category === "Bible" ? "Bible Board" : "Holiday Board")}</p></div>`, "splash", 1900)
-    .then(() => {
-      if (screen !== "survey" || G?.round !== r) return;   // host left during the splash
-      if (m > 1) audio.voice("vo-round");
-      if (solo()) { G.stage = "play"; G.msg = ""; render(); setTimer(D().turn, () => miss("time")); }
-      else { G.stage = "faceoff"; render(); }
-    });
+  const last = G.ri === G.deck.length - 1;
+  await card(`<div class="round-card">
+      <div class="rc-kicker">${last ? "Final Round" : `Round ${G.ri + 1} of ${G.deck.length}`}</div>
+      <div class="rc-coin"><span>×${G.mult}</span></div>
+      <div class="rc-title">${G.mult === 1 ? "Single Points" : G.mult === 2 ? "Double Points" : "Triple Points"}</div>
+      <div class="rc-sub">${r.category === "Bible" ? "Bible Board" : "Holiday Board"}</div>
+    </div>`, "round", 2300);
+  if (screen !== "survey" || G?.round !== r) return;
+  if (G.mult > 1) audio.voice("vo-round");
+  G.stage = "faceoff"; render();
+  faceoffCard();
 }
 
-const curPlayer = () => {
-  if (G.stage === "faceoffAnswer") { const t = G.fo.order[G.fo.step]; return { t, name: pName(t, G.ri + G.fo.retry) }; }
-  if (G.stage === "play") return { t: G.control, name: solo() ? tName(0) : pName(G.control, G.ptr[G.control]) };
-  if (G.stage === "steal") return { t: 1 - G.control, name: `${tName(1 - G.control)} captain` };
-  return null;
-};
-
-function boardHTML() {
-  const r = G.round;
-  return `<div class="board-frame"><span class="bulbs"></span><div class="board">
-    ${r.a.map(([ans, pts], i) => {
-      const rev = G.revealed.includes(i);
-      return `<button class="tile ${rev ? "revealed" : ""} ${G.fresh.has(i) ? "flip-now" : ""} ${i === 0 && rev ? "top" : ""}" data-act="tile" data-i="${i}" style="--d:${i}">
-        <span class="tile-in">
-          <span class="face front"><b>${i + 1}</b></span>
-          <span class="face back"><span class="ans">${esc(ans)}</span><strong>${pts * G.mult}</strong></span>
-        </span></button>`;
-    }).join("")}
-  </div></div>`;
+function faceoffCard() {
+  const p = [faceoffPlayer(0), faceoffPlayer(1)];
+  audio.play("transition", { vol: 0.7 });
+  card(`<div class="vs-card">
+    <div class="vs-side l t0"><small>${esc(tName(0))}</small><b>${esc(p[0]?.name || "Team " + tName(0))}</b></div>
+    <div class="vs-badge">VS</div>
+    <div class="vs-side r t1"><small>${esc(tName(1))}</small><b>${esc(p[1]?.name || "Team " + tName(1))}</b></div>
+    <div class="vs-title">FACE-OFF</div>
+    <div class="vs-hint">${p[0] || p[1] ? "Hands on your phone buzzers!" : "First to slap the table answers!"}</div>
+  </div>`, "vs", 2400);
 }
 
-function scoreHTML() {
-  const teams = solo() ? [0] : [0, 1], cp = curPlayer();
-  return `<section class="scorebar ${solo() ? "solo" : ""}">
-    ${teams.map(t => `<div class="score-team team-${t} ${(G.control === t && ["play", "choose"].includes(G.stage)) || (cp && cp.t === t) ? "lit" : ""}">
-      <div class="st-name">${esc(tName(t))}</div>
-      <div class="st-score" id="score-${t}">${G.shown.scores[t]}</div>
-      ${solo() ? "" : `<div class="chips">${S.teams[t].players.map((p, i) => `<span class="${cp && cp.t === t && cp.name === pName(t, i) ? "on" : ""}">${esc(p)}</span>`).join("")}</div>`}
-    </div>`).join(solo() ? "" : `<div class="bank"><small>Round bank</small><b id="bank">${G.shown.bank}</b><em>×${G.mult}</em></div>`)}
-    ${solo() ? `<div class="bank"><small>Round bank</small><b id="bank">${G.shown.bank}</b><em>×${G.mult}</em></div>` : ""}
-  </section>`;
-}
-
-function strikesHTML() {
-  return `<div class="strikes">${Array.from({ length: D().strikes }, (_, i) => `<span class="${i < G.strikes ? "on" : ""}">✕</span>`).join("")}</div>`;
-}
-
-function guessForm(placeholder) {
-  return `<form class="guess" data-submit="guess" autocomplete="off">
-    <input id="guess" name="g" placeholder="${placeholder}" enterkeyhint="go" autocapitalize="off" spellcheck="false">
-    <button class="btn-gold" type="submit">Survey says!</button>
-  </form>`;
-}
-
-function controlsHTML() {
-  const cp = curPlayer();
-  switch (G.stage) {
-    case "intro": return `<div class="controls"><p class="say">Get ready…</p></div>`;
-    case "faceoff":
-      return `<div class="controls faceoff">
-        <p class="say">${G.msg ? `<span class="warn">${esc(G.msg)}</span> ` : ""}Face-off! <b>${esc(pName(0, G.ri + G.fo.retry))}</b> vs <b>${esc(pName(1, G.ri + G.fo.retry))}</b>. Hands on buzzers!</p>
-        <div class="buzzers">${[0, 1].map(t => `<button class="buzzer team-${t}" data-act="buzz" data-t="${t}"><span class="cap"><small>${esc(pName(t, G.ri + G.fo.retry))}</small><b>BUZZ!</b><em>${esc(tName(t))}</em></span><kbd>${t ? "L" : "A"}</kbd></button>`).join("")}</div>
-      </div>`;
-    case "faceoffAnswer": case "play": case "steal": {
-      const steal = G.stage === "steal";
-      return `<div class="controls live ${steal ? "steal-mode" : ""}">
-        <div class="turn-line">${timerHTML()}<p class="say">${steal ? `<b class="steal-tag">STEAL!</b> ${esc(tName(cp.t))}, huddle up. One answer takes the whole bank!` : `<b>${esc(cp.name)}</b>${solo() ? "" : ` <span class="of">(${esc(tName(cp.t))})</span>`}, your answer?`}</p>${G.stage === "play" ? strikesHTML() : ""}</div>
-        ${G.msg ? `<p class="flash-msg">${G.msg}</p>` : ""}
-        ${guessForm(steal ? "Type the steal answer…" : "Type their answer, or tap a tile…")}
-        <div class="host-row">
-          <button class="btn-x" data-act="miss">${icon("x")} Not on the board</button>
-          ${S.settings.difficulty === "Easy" && G.stage !== "faceoffAnswer" ? `<button class="btn-ghost" data-act="hint">Letter hint</button>` : ""}
-          <button class="btn-ghost" data-act="hostKey">${icon("key")} Host key</button>
-        </div>
-      </div>`;
-    }
-    case "choose":
-      return `<div class="controls choose"><p class="say"><b>${esc(tName(G.fo.winner))}</b> wins the face-off! Play this board, or pass it?</p>
-        <div class="pp"><button class="btn-gold jumbo" data-act="choose" data-v="play">PLAY</button><button class="btn-red jumbo" data-act="choose" data-v="pass">PASS</button></div></div>`;
-    case "award": case "reveal":
-      return `<div class="controls"><p class="say">${G.awardMsg || ""}</p></div>`;
-    case "roundEnd": {
-      const last = G.ri === G.deck.length - 1;
-      return `<div class="controls"><p class="say">${G.awardMsg || ""}</p>
-        <button class="btn-gold jumbo" data-act="nextRound">${last ? `${icon("trophy")} Final results` : `Next round ${icon("play")}`}</button></div>`;
-    }
-  }
-  return "";
-}
-
-screens.survey = {
-  render() {
-    const r = G.round;
-    root.innerHTML = `<main class="page game">
-      ${topBar("Survey Showdown", `Round ${G.ri + 1}/${G.deck.length} · ×${G.mult}`)}
-      ${scoreHTML()}
-      <section class="question"><span class="q-tag">${r.category === "Bible" ? "Bible Board" : "Holiday Board"} · ${esc(r.ref)}</span><h2>${esc(r.q)}</h2>
-        ${G.hint !== null ? `<p class="hint">Hint: an answer starts with <b>${esc(r.a[G.hint][0][0])}</b></p>` : ""}</section>
-      ${boardHTML()}
-      ${controlsHTML()}
-      ${G.hostKey ? `<aside class="hostkey" data-act="hostKey"><h4>${icon("key")} Host eyes only</h4><ol>${r.a.map(([a, p], i) => `<li class="${G.revealed.includes(i) ? "done" : ""}"><span>${esc(a)}</span><b>${p * G.mult}</b></li>`).join("")}</ol><small>Tap to hide</small></aside>` : ""}
-    </main>`;
-    G.fresh.clear();
-    // animate numbers from last shown -> real
-    countUp(document.getElementById("bank"), G.shown.bank, G.bank, 600);
-    G.shown.bank = G.bank;
-    [0, 1].forEach(t => { if (G.shown.scores[t] !== G.scores[t]) { countUp(document.getElementById(`score-${t}`), G.shown.scores[t], G.scores[t], 1200, () => audio.play("coin", { vol: 0.35 })); G.shown.scores[t] = G.scores[t]; } });
-    const gi = document.getElementById("guess");
-    if (gi && matchMedia("(pointer:fine)").matches) gi.focus();
-  },
-  key(e) {
-    if (!G) return;
-    const typing = e.target.tagName === "INPUT";
-    if (G.stage === "faceoff" && !typing) { if (e.key.toLowerCase() === "a") buzz(0); if (e.key.toLowerCase() === "l") buzz(1); }
-    if (!typing && /^[1-6]$/.test(e.key)) hit(+e.key - 1);
-    if (!typing && e.key.toLowerCase() === "x" && ["faceoffAnswer", "play", "steal"].includes(G.stage)) miss();
-  }
-};
-
-function buzz(t) {
-  if (G.stage !== "faceoff") return;
+function buzz(t, pid = null) {
+  if (G?.stage !== "faceoff") return;
+  closeCard(true);
   audio.buzzer(t);
-  G.fo.order = [t, 1 - t]; G.fo.step = 0; G.fo.res = []; G.stage = "faceoffAnswer"; G.msg = "";
+  G.fo.order = [t, 1 - t]; G.fo.step = 0; G.fo.res = []; G.fo.buzzPid = pid;
+  G.stage = "faceoffAnswer"; G.msg = "";
+  const who = pid ? roster.find(p => p.pid === pid)?.name : faceoffPlayer(t)?.name;
+  card(`<div class="buzz-card t${t}"><div class="burst"></div><small>Buzzed in!</small><b>${esc(tName(t))}</b>${who ? `<em>${esc(who)}, your answer?</em>` : ""}</div>`, "buzz", 1500);
   render();
-  document.querySelector(`.score-team.team-${t}`)?.classList.add("buzzed");
-  setTimer(D().faceoff, () => miss("time"));
+  setTimer(S.settings.timer ? Math.min(15, S.settings.timer) : 0, () => strike("time"));
 }
-actions.buzz = el => buzz(+el.dataset.t);
+
+/* --- the one place every host action goes (TV taps, keyboard, remote) --- */
+function act(a, v) {
+  if (a === "closeCard") return closeCard();
+  if (a === "startGameRemote") { if (screen === "lobby") actions.startGame(); return; }
+  if (screen === "survey" && G) {
+    if (a === "buzz") return buzz(+v);
+    if (a === "reveal") return tryReveal(+v);
+    if (a === "strike") return tryStrike();
+    if (a === "choose") return choose(v);
+    if (a === "next") return nextRound();
+    if (a === "peek") { G.peek = !G.peek; return render(); }
+  }
+  if (screen === "fast" && F) return fastAct(a, v);
+  if (screen === "arcade" && A) return arcadeAct(a, v);
+  if (screen === "results") { if (a === "again") return actions.again(); if (a === "fastFromResults") return actions.fastFromResults(); if (a === "menu") return go("home"); }
+}
+actions.act = (v) => { const [a, val] = v.split(":"); act(a, val); };
+actions.tile = v => act("reveal", +v);
+
+const LIVE = ["faceoffAnswer", "play", "steal"];
+function suspense(then, voiceChance = 1) {
+  G.pending = true; stopClock();
+  document.querySelector(".board")?.classList.add("suspense");
+  syncPhones();
+  const said = Math.random() < voiceChance && audio.voice("vo-survey-says");
+  if (!said) audio.play("countdown", { vol: 0.5 });
+  setTimeout(() => { G.pending = false; if (screen === "survey" && G) then(); }, said ? 1250 : 700);
+}
+function tryReveal(i) {
+  if (!G.round.a[i] || G.pending || !LIVE.includes(G.stage)) return;
+  if (G.revealed.includes(i)) { if (G.stage === "play") { audio.play("nope"); flashMsg("Already on the board!"); } return; }
+  suspense(() => hit(i), G.stage === "play" ? 0.45 : 1);
+}
+function tryStrike() {
+  if (G.pending || !LIVE.includes(G.stage)) return;
+  suspense(() => strike(), G.stage === "play" ? 0.45 : 1);
+}
 
 function reveal(i, live = true) {
   G.revealed.push(i); G.fresh.add(i);
   if (live) {
     G.bank += G.round.a[i][1] * G.mult;
-    if (i === 0) { audio.play("top"); audio.voice("vo-top-answer"); setTimeout(() => confetti(70, { x: 0.5, y: 0.45 }), 250); }
+    if (i === 0) { audio.play("top"); setTimeout(() => audio.voice("vo-top-answer"), 350); setTimeout(() => confetti(90, { x: 0.5, y: 0.42 }), 250); }
     else audio.play("reveal");
   } else audio.ding(i * 2);
 }
 
 function hit(i) {
-  if (!G.round.a[i]) return;
   const st = G.stage;
-  if (!["faceoffAnswer", "play", "steal"].includes(st)) return;
-  if (G.revealed.includes(i)) {
-    if (st === "play") { G.msg = "Already on the board! Try another."; audio.play("nope"); render(); return; }
-    return miss("dup");
-  }
-  stopClock(); G.msg = ""; G.hint = null;
   reveal(i);
   if (st === "faceoffAnswer") {
     G.fo.res[G.fo.step] = i;
-    if (i === 0) return winFaceoff(G.fo.order[G.fo.step], true);
-    if (G.fo.step === 0) { G.fo.step = 1; G.msg = `Good answer, but not #1! Can ${esc(tName(G.fo.order[1]))} beat it?`; render(); return setTimer(D().faceoff, () => miss("time")); }
+    if (i === 0) return winFaceoff(G.fo.order[G.fo.step]);
+    if (G.fo.step === 0) { G.fo.step = 1; G.msg = `Not the top answer! ${tName(G.fo.order[1])}, can you beat it?`; render(); return setTimer(S.settings.timer ? 15 : 0, () => strike("time")); }
     return settleFaceoff();
   }
-  if (st === "steal") { G.stolen = true; audio.play("steal"); return endRound(1 - G.control); }
-  // play
+  if (st === "steal") { G.stolen = true; return endRound(1 - G.control); }
   G.ptr[G.control]++;
-  if (G.revealed.length === G.round.a.length) { if (!G.strikes) S.rewards.perfect++; return endRound(G.control, true); }
-  G.msg = `${["Nice!", "Good answer!", "On the board!", "Yes!", "Survey says… YES!"][Math.floor(Math.random() * 5)]} Next player.`;
+  if (G.revealed.length === G.round.a.length) return endRound(G.control, true);
+  G.msg = ["Good answer!", "On the board!", "Yes!", "Survey says… YES!"][Math.floor(Math.random() * 4)];
   render();
-  setTimer(D().turn, () => miss("time"));
+  setTimer(S.settings.timer, () => strike("time"));
 }
-actions.tile = el => { if (!G.pending) hit(+el.dataset.i); };
 
-function miss(why) {
+function strike(why) {
   const st = G.stage;
-  if (!["faceoffAnswer", "play", "steal"].includes(st)) return;
-  stopClock(); G.hint = null;
+  if (!LIVE.includes(st)) return;
+  stopClock();
   audio.wrong();
-  const why_ = why === "time" ? "Time's up! " : why === "dup" ? "Already taken! " : "";
   if (st === "faceoffAnswer") {
-    strikeFlash(1);
+    xCard(1);
     G.fo.res[G.fo.step] = -1;
-    if (G.fo.step === 0) { G.fo.step = 1; G.msg = `${why_}${esc(pName(G.fo.order[1], G.ri + G.fo.retry))}, it's your chance!`; render(); return setTimer(D().faceoff, () => miss("time")); }
+    if (G.fo.step === 0) { G.fo.step = 1; G.msg = `${why === "time" ? "Time's up! " : ""}${tName(G.fo.order[1])}, it's your chance!`; render(); return setTimer(S.settings.timer ? 15 : 0, () => strike("time")); }
     return settleFaceoff();
   }
-  if (st === "steal") { strikeFlash(1); return endRound(G.control); }
+  if (st === "steal") { xCard(1); return setTimeout(() => endRound(G.control), 900); }
   G.strikes++;
-  strikeFlash(G.strikes);
+  xCard(G.strikes);
   G.ptr[G.control]++;
-  if (G.strikes >= D().strikes) {
-    if (solo()) return endRound(0);
-    return setTimeout(() => { if (screen === "survey") toSteal(); }, 1100);
-  }
-  G.msg = `${why_}Strike ${G.strikes}! Next player.`;
+  if (G.strikes >= STRIKES) { render(); return setTimeout(() => { if (screen === "survey") toSteal(); }, 1300); }
+  G.msg = `${why === "time" ? "Time's up! " : ""}Strike ${G.strikes}! Next player.`;
   render();
-  setTimer(D().turn, () => miss("time"));
+  setTimer(S.settings.timer, () => strike("time"));
 }
-actions.miss = () => { if (!G.pending) miss(); };
-
-actions.guess = f => {
-  const v = f.g.value.trim();
-  if (!v || G.pending) return;
-  const i = matchAnswer(v, G.round.a);
-  // "Survey says!" voice, then the dramatic reveal
-  if (audio.voice("vo-survey-says")) {
-    const stage = G.stage;
-    G.pending = true; stopClock();
-    f.querySelector("button").disabled = true; f.g.disabled = true;
-    document.querySelector(".controls.live")?.classList.add("suspense");
-    setTimeout(() => {
-      G.pending = false;
-      if (screen !== "survey" || G.stage !== stage) return;
-      if (i >= 0) hit(i); else miss();
-    }, 1250);
-    return;
-  }
-  if (i >= 0) hit(i); else miss();
-};
-actions.hint = () => {
-  const left = G.round.a.map((_, i) => i).filter(i => !G.revealed.includes(i));
-  if (!left.length) return;
-  G.hint = left[Math.floor(Math.random() * left.length)]; audio.play("star"); render();
-};
-actions.hostKey = () => {
-  G.hostKey = !G.hostKey; audio.play("pop"); render();
-  if (G.hostKey) { clearTimeout(G._hk); G._hk = setTimeout(() => { if (G?.hostKey) { G.hostKey = false; if (screen === "survey") render(); } }, 7000); }
-};
+function xCard(n) {
+  card(`<div class="x-wrap">${Array.from({ length: n }, (_, i) => `<span class="xx" style="--i:${i}"><i></i></span>`).join("")}</div>`, "strike", 1150);
+  stageBox.classList.remove("shake"); void stageBox.offsetWidth; stageBox.classList.add("shake");
+}
+function flashMsg(m) { G.msg = m; render(); }
 
 function settleFaceoff() {
-  const [a, b] = G.fo.res.map(r => (r === undefined || r < 0) ? 99 : r);
+  const [a, b] = [0, 1].map(k => (G.fo.res[k] === undefined || G.fo.res[k] < 0) ? 99 : G.fo.res[k]);
   if (a === 99 && b === 99) {
-    G.fo.retry++; G.stage = "faceoff"; G.msg = "Nobody hit the board! New face-off pair.";
-    return setTimeout(() => { if (screen === "survey") render(); }, 900);
+    G.fo.retry++; G.stage = "faceoff"; G.msg = "";
+    return setTimeout(() => { if (screen === "survey") { render(); card(`<div class="banner-card"><b>Nobody hit the board!</b><small>New face-off pair</small></div>`, "banner", 1500).then(() => screen === "survey" && G.stage === "faceoff" && faceoffCard()); } }, 1100);
   }
-  winFaceoff(a <= b ? G.fo.order[0] : G.fo.order[1], false);
+  winFaceoff(a <= b ? G.fo.order[0] : G.fo.order[1]);
 }
-function winFaceoff(team, top) {
+function winFaceoff(team) {
   stopClock();
   G.fo.winner = team; G.stage = "choose"; G.msg = "";
   render();
-  setTimeout(() => audio.play("levelup"), top ? 900 : 400);
+  setTimeout(() => {
+    if (screen !== "survey" || G.stage !== "choose") return;
+    audio.play("levelup");
+    card(`<div class="pp-card t${team}"><small>${esc(tName(team))} wins the face-off</small><b>Play or Pass?</b>
+      <div class="row"><button class="btn gold xl" data-act="act" data-v="choose:play">PLAY</button><button class="btn red xl" data-act="act" data-v="choose:pass">PASS</button></div></div>`, "pp", 0);
+  }, 1100);
 }
-actions.choose = el => {
-  const t = G.fo.winner, play = el.dataset.v === "play";
+function choose(v) {
+  if (G.stage !== "choose") return;
+  closeCard();
+  const t = G.fo.winner, play = v === "play";
   G.control = play ? t : 1 - t;
-  // next player after the face-off player starts
   G.ptr[G.control] = G.ri + G.fo.retry + (play ? 1 : 0);
-  G.stage = "play"; G.msg = play ? "" : `${esc(tName(t))} passed! ${esc(tName(G.control))}, it's all yours.`;
+  G.stage = "play"; G.msg = play ? "" : `${tName(t)} passed!`;
   audio.play("whoosh");
-  if (G.revealed.length === G.round.a.length) return endRound(G.control);
   render();
-  setTimer(D().turn, () => miss("time"));
-};
-
+  card(`<div class="banner-card t${G.control}"><small>${play ? "They're playing it!" : "Passed!"}</small><b>${esc(tName(G.control))}'s board</b></div>`, "banner", 1300);
+  if (G.revealed.length === G.round.a.length) return endRound(G.control);
+  setTimer(S.settings.timer, () => strike("time"));
+}
 function toSteal() {
   G.stage = "steal"; G.msg = "";
   audio.play("steal");
   if (!audio.voice("vo-steal")) audio.play("transition", { vol: 0.6 });
-  overlay(`<div class="steal-splash"><b>STEAL!</b><small>${esc(tName(1 - G.control))} — one answer for ${G.bank} points</small></div>`, "splash steal", 1500)
-    .then(() => { if (screen === "survey" && G?.stage === "steal") { render(); setTimer(D().steal, () => miss("time")); } });
   render();
+  card(`<div class="steal-card"><div class="alarm"></div><b>STEAL!</b><small>${esc(tName(1 - G.control))}: huddle up. One answer takes all <em>${G.bank}</em> points!</small></div>`, "steal", 2400)
+    .then(() => { if (screen === "survey" && G.stage === "steal") setTimer(S.settings.timer ? 20 : 0, () => strike("time")); });
 }
-
 function endRound(team, sweep = false) {
   stopClock();
-  G.stage = "award";
   const pts = G.bank;
-  G.awardMsg = solo() ? `You banked <b>${pts}</b> points!` :
-    G.stolen ? `<b>${esc(tName(team))}</b> STOLE <b>${pts}</b> points!` :
-    sweep ? `Board cleared! <b>${esc(tName(team))}</b> takes <b>${pts}</b>!` :
-    `<b>${esc(tName(team))}</b> banks <b>${pts}</b> points.`;
-  G.scores[team] += pts;
-  G.bank = 0;            // bank drains into the team score (both animate)
-  G.bankTeam = team;
+  G.stage = "award";
+  G.awardMsg = G.stolen ? `${tName(team)} stole ${pts}!` : sweep ? `Board cleared! ${tName(team)} +${pts}` : `${tName(team)} banks ${pts}`;
+  G.scores[team] += pts; G.bank = 0;
   render();
   audio.play(G.stolen ? "steal" : "win", { vol: 0.8 });
   if (sweep || G.stolen) confettiRain(1.6);
-  // reveal the rest one by one
-  const rest = G.round.a.map((_, i) => i).filter(i => !G.revealed.includes(i));
-  let k = 0;
-  const step = () => {
-    if (screen !== "survey" || !G) return;
-    if (k >= rest.length) { G.stage = "roundEnd"; render(); return; }
-    G.stage = "reveal"; reveal(rest[k++], false); render();
-    setTimeout(step, 520);
-  };
-  setTimeout(step, 1400);
+  card(`<div class="award-card t${team}"><small>${G.stolen ? "Stolen!" : sweep ? "Board cleared!" : "Points to"}</small><b>${esc(tName(team))}</b><div class="award-pts">+${pts}</div></div>`, "award", 2000)
+    .then(() => {
+      const rest = G.round.a.map((_, i) => i).filter(i => !G.revealed.includes(i));
+      let k = 0;
+      const step = () => {
+        if (screen !== "survey" || !G) return;
+        if (k >= rest.length) { G.stage = "roundEnd"; render(); return; }
+        G.stage = "reveal"; reveal(rest[k++], false); render(); setTimeout(step, 480);
+      };
+      step();
+    });
 }
-actions.nextRound = () => {
+function nextRound() {
+  if (G.stage !== "roundEnd") return;
   if (G.ri === G.deck.length - 1) return finishSurvey();
   G.ri++; audio.play("whoosh"); beginRound();
-};
+}
+
+/* --- what the host can do right now (TV dock + remote use the same list) --- */
+function hostControls() {
+  if (!G) return [];
+  switch (G.stage) {
+    case "faceoff": return [{ a: "buzz", v: 0, label: `${tName(0)} buzzed first`, kind: "t0" }, { a: "buzz", v: 1, label: `${tName(1)} buzzed first`, kind: "t1" }];
+    case "faceoffAnswer": case "play": case "steal": return [{ a: "strike", label: "✕  Not on the board", kind: "x", main: false }];
+    case "choose": return [{ a: "choose", v: "play", label: "PLAY", kind: "gold", main: true }, { a: "choose", v: "pass", label: "PASS", kind: "red" }];
+    case "roundEnd": return [{ a: "next", label: G.ri === G.deck.length - 1 ? "Final results ▶" : "Next round ▶", kind: "gold", main: true }];
+  }
+  return [];
+}
+function prompt() {
+  const st = G.stage;
+  if (st === "intro") return "Get ready…";
+  if (st === "faceoff") { const p = [faceoffPlayer(0), faceoffPlayer(1)]; return `FACE-OFF · ${p[0] ? esc(p[0].name) : esc(tName(0))} vs ${p[1] ? esc(p[1].name) : esc(tName(1))} · buzz in!`; }
+  if (st === "faceoffAnswer") { const t = G.fo.order[G.fo.step]; const p = G.fo.step === 0 && G.fo.buzzPid ? roster.find(x => x.pid === G.fo.buzzPid) : faceoffPlayer(t); return `${G.msg ? esc(G.msg) + " · " : ""}<b>${esc(p?.name || tName(t))}</b>, your answer?`; }
+  if (st === "choose") return `<b>${esc(tName(G.fo.winner))}</b>: play or pass?`;
+  if (st === "play") { const p = turnPlayer(G.control); return `${G.msg ? esc(G.msg) + " · " : ""}<b>${esc(p?.name || tName(G.control))}</b>${p ? ` <span class="of">(${esc(tName(G.control))})</span>` : ""}, your answer?`; }
+  if (st === "steal") return `<b class="hot">STEAL</b> · ${esc(tName(1 - G.control))} captain, one answer!`;
+  if (st === "award" || st === "reveal") return esc(G.awardMsg);
+  if (st === "roundEnd") return `${esc(G.awardMsg)} · ${G.ri === G.deck.length - 1 ? "Final results next!" : "Next round?"}`;
+  return "";
+}
+
+function renderSurvey() {
+  const r = G.round, rem = remoteOn();
+  const controls = hostControls();
+  const active = G.stage === "play" || G.stage === "choose" ? G.control ?? G.fo.winner : G.stage === "faceoffAnswer" ? G.fo.order[G.fo.step] : G.stage === "steal" ? 1 - G.control : null;
+  stage.innerHTML = `
+  <div class="scene game">
+    <div class="spot-l"></div><div class="spot-r"></div>
+    <header class="scorebar">
+      ${[0, 1].map(t => `<div class="pod t${t} ${active === t ? "lit" : ""}">
+        <div class="pod-name">${esc(tName(t))}</div>
+        <div class="pod-score"><span id="score-${t}">${G.shown.scores[t]}</span></div>
+        <div class="pod-roster">${teamRoster(t).map(p => `<i class="${(G.stage === "play" && G.control === t && turnPlayer(t)?.pid === p.pid) ? "on" : ""}">${esc(p.name)}</i>`).join("")}</div>
+      </div>`).join(`<div class="bank-pod"><small>Round ${G.ri + 1}/${G.deck.length}</small><b id="bank">${G.shown.bank}</b><em>×${G.mult}</em></div>`)}
+    </header>
+    <section class="qbar"><span>${r.category === "Bible" ? "Bible Board" : "Holiday Board"} · ${esc(r.ref)}</span><h2>${esc(r.q)}</h2></section>
+    <section class="board-shell">
+      <div class="board-chrome"><div class="marquee"></div>
+        <div class="board ${G.pending ? "suspense" : ""}">
+          ${r.a.map(([ans, pts], i) => {
+            const rev = G.revealed.includes(i);
+            return `<button class="slat ${rev ? "rev" : ""} ${G.fresh.has(i) ? "flip" : ""} ${i === 0 && rev ? "top" : ""}" data-act="tile" data-v="${i}" style="--d:${i}">
+              <span class="slat-in"><span class="f front"><em>${i + 1}</em>${G.peek ? `<span class="peek">${esc(ans)} · ${pts * G.mult}</span>` : ""}</span>
+              <span class="f back"><span class="ans">${esc(ans)}</span><strong>${pts * G.mult}</strong></span></span></button>`;
+          }).join("")}
+        </div>
+      </div>
+    </section>
+    <footer class="lower-third">
+      <div class="lt-left"><span class="lt-tag">${G.stage === "steal" ? "STEAL" : G.stage === "faceoff" || G.stage === "faceoffAnswer" ? "FACE-OFF" : "LIVE"}</span><p>${prompt()}</p></div>
+      <div class="lt-right">
+        <div id="clockSlot">${timerHTML()}</div>
+        <div class="strikes">${Array.from({ length: STRIKES }, (_, i) => `<span class="${i < G.strikes ? "on" : ""}">✕</span>`).join("")}</div>
+      </div>
+    </footer>
+    ${rem ? `<div class="remote-badge">${icon("key")} Host remote</div>` : `<div class="host-dock"><span class="dock-label">HOST</span>
+      ${controls.filter(c => G.stage !== "choose").map(c => `<button class="dbtn ${c.kind}" data-act="act" data-v="${c.a}:${c.v ?? ""}">${c.label}</button>`).join("")}
+      ${LIVE.includes(G.stage) ? `<button class="dbtn ghost" data-act="act" data-v="peek:" title="Shows answers on screen">${icon("key")} ${G.peek ? "Hide" : "Peek"}</button><span class="dock-tip">Tap a tile to reveal</span>` : ""}
+    </div>`}
+    <button class="back-btn" data-act="home">${icon("home")}</button>
+  </div>`;
+  G.fresh.clear();
+  countUp(document.getElementById("bank"), G.shown.bank, G.bank, 600); G.shown.bank = G.bank;
+  [0, 1].forEach(t => { if (G.shown.scores[t] !== G.scores[t]) { countUp(document.getElementById(`score-${t}`), G.shown.scores[t], G.scores[t], 1300, () => audio.play("coin", { vol: 0.3 })); G.shown.scores[t] = G.scores[t]; } });
+}
 
 function finishSurvey() {
   const sc = G.scores;
-  S.rewards.games++;
-  let title, sub, winner = null;
-  if (solo()) {
-    S.rewards.bestSolo = Math.max(S.rewards.bestSolo, sc[0]);
-    const stars = sc[0] >= 400 ? 3 : sc[0] >= 220 ? 2 : 1;
-    S.rewards.stars += stars;
-    title = `${esc(tName(0))} scored ${sc[0]}!`; sub = `${"★".repeat(stars)}${"☆".repeat(3 - stars)} · Best ever: ${S.rewards.bestSolo}`;
-  } else if (sc[0] === sc[1]) {
-    S.rewards.stars += 2; title = "It's a TIE!"; sub = "Settle it in Fast Money!";
-  } else {
-    winner = sc[0] > sc[1] ? 0 : 1; S.rewards.wins++; S.rewards.stars += 3;
-    title = `${esc(tName(winner))} WIN!`; sub = "Champions of Christmas";
+  const winner = sc[0] === sc[1] ? null : sc[0] > sc[1] ? 0 : 1;
+  go("results", { kind: "survey", winner, scores: sc, title: winner === null ? "It's a TIE!" : `${tName(winner)} wins!`, sub: winner === null ? "Settle it with Fast Money!" : "Champions of Christmas" });
+}
+
+/* =========================================================
+   FAST MONEY (host taps what each player said)
+   ========================================================= */
+let F = null;
+function startFast(team = 0) {
+  audio.play("gong"); keepAwake();
+  F = { team, qs: shuffle(FAST_MONEY_BANK).slice(0, 5), phase: "intro", qi: 0, pick: [[], []], shown: [0, 0], total: 0, shownTotal: 0, dup: false };
+  go("fast");
+}
+const fmPlayer = i => { const r = teamRoster(F.team); return r[i]?.name || `Player ${i + 1}`; };
+const fmTotal = () => [0, 1].reduce((s, p) => s + F.pick[p].reduce((a, ix, q) => a + (ix >= 0 && q < F.shown[p] ? F.qs[q].a[ix][1] : 0), 0), 0);
+screens.fast = {
+  enter() { audio.music("fastmoney"); setTimeout(() => { if (!audio.voice("vo-fast-money")) audio.play("transition"); }, 300); },
+  render() {
+    const ph = F.phase, pl = ph.endsWith("2") ? 1 : 0, rem = remoteOn();
+    const total = fmTotal();
+    const rows = F.qs.map((q, qi) => `<div class="fm-row">
+      ${[0, 1].map(p => {
+        const shown = qi < F.shown[p], ix = F.pick[p][qi];
+        if (!shown || ix === undefined) return `<div class="fm-cell blank"></div>`;
+        return `<div class="fm-cell ${ix >= 0 ? "hit" : "miss"} flip"><span>${ix >= 0 ? esc(q.a[ix][0]) : "—"}</span><b>${ix >= 0 ? q.a[ix][1] : 0}</b></div>`;
+      }).join("")}</div>`).join("");
+    let center = "";
+    if (ph === "intro") center = `<div class="fm-intro"><h1>FAST <span>MONEY</span></h1><p>Two players · five questions · reach <b>200</b> together!</p>
+      <div class="fm-team">${[0, 1].map(t => `<button class="${F.team === t ? "on" : ""} t${t}" data-act="act" data-v="fmTeam:${t}">${esc(tName(t))}</button>`).join("")}</div>
+      <p class="small">${esc(fmPlayer(1))}: leave the room until it's your turn!</p></div>`;
+    else if (ph === "p1" || ph === "p2") center = `<div class="fm-live"><div class="fm-clock" id="clockSlot">${timerHTML()}</div>
+      <div class="fm-q"><small>${esc(fmPlayer(pl))} · Question ${F.qi + 1} of 5</small><h2>${esc(F.qs[F.qi].q)}</h2></div></div>`;
+    stage.innerHTML = `<div class="scene fast">
+      ${rays()}
+      <div class="fm-board-wrap"><div class="board-chrome"><div class="marquee"></div>
+        <div class="fm-board">${rows}<div class="fm-total"><small>TOTAL</small><b id="fmTotal">${F.shownTotal}</b><span>/ 200</span></div></div></div></div>
+      ${center ? `<div class="fm-center">${center}</div>` : ""}
+      ${rem ? `<div class="remote-badge">${icon("key")} Host remote</div>` : `<div class="host-dock wide"><span class="dock-label">HOST</span>${fmControls().map(c => `<button class="dbtn ${c.kind}" data-act="act" data-v="${c.a}:${c.v ?? ""}">${c.label}</button>`).join("")}</div>`}
+      <button class="back-btn" data-act="home">${icon("home")}</button>
+    </div>`;
+    const el = document.getElementById("fmTotal");
+    if (total !== F.shownTotal) { countUp(el, F.shownTotal, total, 700); F.shownTotal = total; }
   }
-  save();
-  go("results", { title, sub, scores: solo() ? [sc[0]] : sc, winner, kind: "survey" });
+};
+function fmControls() {
+  const ph = F.phase;
+  if (ph === "intro") return [{ a: "fmStart", v: 0, label: `Start ${fmPlayer(0)}: 20 seconds`, kind: "gold", main: true }];
+  if (ph === "p1" || ph === "p2") return [...F.qs[F.qi].a.map(([a, p], i) => ({ a: "fmPick", v: i, label: `${a} · ${p}`, kind: "ans" })), { a: "fmPick", v: -1, label: "No match", kind: "x" }, { a: "fmPass", label: "Pass", kind: "ghost" }];
+  if (ph === "rev1" || ph === "rev2") {
+    const p = ph === "rev1" ? 0 : 1;
+    if (F.shown[p] < 5) return [{ a: "fmReveal", label: `Reveal answer ${F.shown[p] + 1}`, kind: "gold", main: true }];
+    if (ph === "rev1") return [{ a: "fmStart", v: 1, label: `Bring in ${fmPlayer(1)}: 25 seconds`, kind: "red", main: true }];
+    return [{ a: "fmDone", label: "Final result ▶", kind: "gold", main: true }];
+  }
+  return [];
+}
+function fastAct(a, v) {
+  if (a === "fmTeam" && F.phase === "intro") { F.team = +v; audio.play("pop"); return render(); }
+  if (a === "fmStart") {
+    const pl = +v; F.phase = pl ? "p2" : "p1"; F.qi = 0; F.queue = [1, 2, 3, 4];
+    audio.play("countdown");
+    render();
+    return setTimer(pl ? 25 : 20, fmEnd, true);
+  }
+  if (a === "fmPick" && (F.phase === "p1" || F.phase === "p2")) {
+    const pl = F.phase === "p2" ? 1 : 0, ix = +v;
+    if (pl === 1 && ix >= 0 && ix === F.pick[0][F.qi]) {
+      audio.wrong(); setTimeout(() => audio.wrong(), 250);
+      card(`<div class="banner-card hot"><b>DUPLICATE!</b><small>Already said. Try again!</small></div>`, "banner", 1100);
+      return;
+    }
+    F.pick[pl][F.qi] = ix; audio.play("pop");
+    return fmAdvance();
+  }
+  if (a === "fmPass" && (F.phase === "p1" || F.phase === "p2")) { if (F.queue.length) { F.queue.push(F.qi); audio.play("whoosh", { vol: 0.5 }); return fmAdvance(); } return fastAct("fmPick", -1); }
+  if (a === "fmReveal") {
+    const p = F.phase === "rev1" ? 0 : 1; if (F.shown[p] >= 5) return;
+    const ix = F.pick[p][F.shown[p]];
+    F.shown[p]++;
+    audio.play("countdown", { vol: 0.4 });
+    render();
+    setTimeout(() => { ix >= 0 ? audio.play(ix === 0 ? "top" : "reveal") : audio.wrong(); }, 150);
+    return;
+  }
+  if (a === "fmDone") {
+    const total = fmTotal(), won = total >= 200;
+    go("results", { kind: "fast", winner: won ? 0 : null, won, scores: [total], title: won ? "FAST MONEY WIN!" : `${total} points!`, sub: won ? `${tName(F.team)} beat 200!` : "So close. Run it back!" });
+  }
+}
+function fmAdvance() { if (!F.queue.length) return fmEnd(); F.qi = F.queue.shift(); render(); }
+function fmEnd() {
+  stopClock();
+  const pl = F.phase === "p2" ? 1 : 0;
+  for (let q = 0; q < 5; q++) if (F.pick[pl][q] === undefined) F.pick[pl][q] = -1;
+  F.phase = pl ? "rev2" : "rev1"; audio.play("gong");
+  card(`<div class="banner-card"><b>${pl ? "Time!" : "Time!"}</b><small>Let's see what the survey says…</small></div>`, "banner", 1400);
+  render();
+}
+
+/* =========================================================
+   BIBLE CHALLENGE (multiple choice, teams alternate)
+   ========================================================= */
+let A = null;
+function startArcade() {
+  audio.play("gong"); keepAwake();
+  const deck = shuffle(CHALLENGE_BANK).slice(0, 10).map(c => { const o = shuffle(c.choices.map((_, i) => i)); return { ...c, choices: o.map(i => c.choices[i]), answer: o.indexOf(c.answer) }; });
+  A = { deck, i: 0, scores: [0, 0], picked: null, team: 0 };
+  go("arcade");
+  setTimer(S.settings.timer || 0, () => arcadeAct("arcPick", -1));
+}
+screens.arcade = {
+  enter() { audio.music("game"); },
+  render() {
+    const c = A.deck[A.i], rem = remoteOn();
+    stage.innerHTML = `<div class="scene arcade">
+      <div class="spot-l"></div><div class="spot-r"></div>
+      <header class="scorebar">${[0, 1].map(t => `<div class="pod t${t} ${A.team === t ? "lit" : ""}"><div class="pod-name">${esc(tName(t))}</div><div class="pod-score"><span>${A.scores[t]}</span></div></div>`).join(`<div class="bank-pod"><small>Question</small><b>${A.i + 1}</b><em>of ${A.deck.length}</em></div>`)}</header>
+      <section class="ac-card"><span class="ac-type">${esc(c.type)}</span><h2>${esc(c.q)}</h2><div id="clockSlot" class="ac-clock">${timerHTML()}</div></section>
+      <section class="ac-choices ${c.choices.length === 2 ? "two" : ""}">${c.choices.map((ch, i) => {
+        const cls = A.picked === null ? "" : i === c.answer ? "right" : i === A.picked ? "wrong" : "dim";
+        return `<button class="ac-choice ${cls}" data-act="act" data-v="arcPick:${i}" style="--d:${i}"><b>${"ABCD"[i]}</b><span>${esc(ch)}</span></button>`; }).join("")}</section>
+      <footer class="lower-third"><div class="lt-left"><span class="lt-tag">${A.picked === null ? esc(tName(A.team)) : "ANSWER"}</span><p>${A.picked === null ? `<b>${esc(tName(A.team))}</b>, what's your answer?` : esc(c.note)}</p></div>
+        ${A.picked !== null && !rem ? `<button class="dbtn gold big" data-act="act" data-v="arcNext:">${A.i === A.deck.length - 1 ? "Final results ▶" : "Next question ▶"}</button>` : ""}</footer>
+      ${rem ? `<div class="remote-badge">${icon("key")} Host remote</div>` : ""}
+      <button class="back-btn" data-act="home">${icon("home")}</button>
+    </div>`;
+  }
+};
+function arcadeAct(a, v) {
+  if (a === "arcPick" && A.picked === null) {
+    stopClock();
+    const c = A.deck[A.i], i = +v;
+    A.picked = i;
+    if (i === c.answer) { A.scores[A.team] += 10; audio.play("right"); confetti(60, { x: 0.5, y: 0.6 }); }
+    else { audio.wrong(); }
+    return render();
+  }
+  if (a === "arcNext" && A.picked !== null) {
+    if (A.i === A.deck.length - 1) {
+      const sc = A.scores, w = sc[0] === sc[1] ? null : sc[0] > sc[1] ? 0 : 1;
+      return go("results", { kind: "arcade", winner: w, scores: sc, title: w === null ? "It's a TIE!" : `${tName(w)} wins!`, sub: "Bible Challenge complete" });
+    }
+    A.i++; A.team = 1 - A.team; A.picked = null; audio.play("whoosh", { vol: 0.5 }); render();
+    setTimer(S.settings.timer || 0, () => arcadeAct("arcPick", -1));
+  }
 }
 
 /* =========================================================
@@ -620,260 +766,104 @@ function finishSurvey() {
 let R = null;
 screens.results = {
   enter(r) {
-    R = r;
-    audio.music("win");
-    audio.play("victory");
-    const won = r.kind === "fast" ? r.winner === 0 : true;          // Fast Money can be lost
-    if (r.kind === "survey" && r.winner !== null && r.winner !== undefined) {
-      setTimeout(() => audio.voice("vo-winner"), 700);              // "And the champions of Christmas are..."
-      setTimeout(() => audio.voice("vo-congrats"), 3500);
-    } else if (won) setTimeout(() => audio.voice("vo-congrats"), 700);
-    setTimeout(() => { confetti(160); confettiRain(4); }, 300);
+    R = r; closeCard(true);
+    audio.music("win"); audio.play("victory");
+    const champ = r.winner !== null && r.winner !== undefined;
+    if (r.kind === "survey" && champ) { setTimeout(() => audio.voice("vo-winner"), 700); setTimeout(() => audio.voice("vo-congrats"), 3500); }
+    else if (champ || r.won) setTimeout(() => audio.voice("vo-congrats"), 700);
+    setTimeout(() => { confetti(180); confettiRain(5); }, 400);
   },
   render() {
-    const teams = R.scores.length === 1 ? [0] : [0, 1];
-    root.innerHTML = `<main class="page results">
-      <div class="trophy-wrap"><img src="assets/trophy.jpg" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><div class="trophy-fallback">${I.trophy}</div></div>
-      <h1 class="win-title">${R.title}</h1>
-      <p class="win-sub">${R.sub}</p>
-      <div class="final-scores">${teams.map(t => `<div class="fs team-${t} ${R.winner === t ? "champ" : ""}">${R.winner === t ? icon("crown") : ""}<span>${esc(R.kind === "fast" ? (t ? "Target" : tName(R.team)) : tName(t))}</span><b>${R.scores[t]}</b></div>`).join("")}</div>
-      <div class="results-actions">
-        ${R.kind === "survey" ? `<button class="btn-gold jumbo" data-act="startSurvey">Play again</button>${solo() ? "" : `<button class="btn-red jumbo" data-act="startFast" data-team="${R.winner ?? 0}">${icon("bolt")} Fast Money</button>`}` : ""}
-        ${R.kind === "fast" ? `<button class="btn-gold jumbo" data-act="startFast">Play Fast Money again</button>` : ""}
-        ${R.kind === "arcade" ? `<button class="btn-gold jumbo" data-act="startArcade">Play again</button>` : ""}
-        <button class="btn-ghost" data-act="home">${icon("home")} Menu</button>
+    const pods = R.kind === "fast" ? "" : [0, 1].map(t => `<div class="res-pod t${t} ${R.winner === t ? "champ" : ""}">${R.winner === t ? icon("crown") : ""}<span>${esc(tName(t))}</span><b>${R.scores[t]}</b></div>`).join("");
+    stage.innerHTML = `<div class="scene results">
+      ${rays()}
+      <div class="trophy"><div class="trophy-glow"></div><img src="assets/trophy.jpg" alt=""></div>
+      <h1 class="res-title">${esc(R.title)}</h1>
+      <p class="res-sub">${esc(R.sub)}</p>
+      ${R.kind === "fast" ? `<div class="res-pod solo ${R.won ? "champ" : ""}"><span>Fast Money total</span><b>${R.scores[0]}</b></div>` : `<div class="res-pods">${pods}</div>`}
+      <div class="res-actions">
+        <button class="btn gold xl" data-act="again">${icon("play")} Play again</button>
+        ${R.kind === "survey" ? `<button class="btn red xl" data-act="fastFromResults">${icon("bolt")} Fast Money</button>` : ""}
+        <button class="btn ghost xl" data-act="home">${icon("home")} Menu</button>
       </div>
-      <p class="tiny-foot">+ stars added to your Trophy Room</p>
-    </main>`;
+    </div>`;
   }
 };
+actions.again = () => { if (R.kind === "fast") startFast(F?.team ?? 0); else if (R.kind === "arcade") startArcade(); else startSurvey(); };
+actions.fastFromResults = () => startFast(R.winner ?? 0);
 
 /* =========================================================
-   FAST MONEY
-   ========================================================= */
-let F = null;
-actions.startFast = el => {
-  audio.play("gong"); keepAwake();
-  const team = el?.dataset.team !== undefined ? +el.dataset.team : 0;
-  F = { team, p: [0, Math.min(1, S.teams[team].players.length - 1)], qs: shuffle(FAST_MONEY_BANK).slice(0, 5), phase: "intro",
-        ans: [[], []], pick: [[], []], shownRows: [0, 0], qi: 0, queue: [], msg: "", total: 0 };
-  go("fast");
-};
-const fmTotal = () => [0, 1].reduce((s, p) => s + F.pick[p].reduce((a, ix, q) => a + (ix >= 0 && q < F.shownRows[p] ? F.qs[q].a[ix][1] : 0), 0), 0);
-
-screens.fast = {
-  enter() { audio.music("fastmoney"); if (!audio.voice("vo-fast-money")) audio.play("transition", { vol: 0.6 }); },
-  render() {
-    const ph = F.phase, pl = ph.endsWith("2") ? 1 : 0;
-    const who = i => solo() ? tName(0) : pName(F.team, F.p[i]);
-    let body = "";
-    if (ph === "intro") {
-      body = `<section class="panel fm-intro">
-        <h2>Fast Money</h2>
-        <p>Two players. Five rapid-fire questions. <b>Reach 200 points together</b> to win!</p>
-        ${solo() ? "" : `<div class="grid-2">
-          <div><h3>Team</h3><div class="seg">${[0, 1].map(t => `<button class="${F.team === t ? "on" : ""}" data-act="fmTeam" data-t="${t}">${esc(tName(t))}</button>`).join("")}</div></div>
-          <div><h3>Players</h3><div class="seg wrap">${S.teams[F.team].players.map((p, i) => `<button class="${F.p.includes(i) ? "on" : ""}" data-act="fmPlayer" data-i="${i}">${esc(p)}</button>`).join("")}</div><small>Tap two players</small></div>
-        </div>`}
-        <ol class="fm-rules"><li><b>${esc(who(0))}</b> gets <b>20 seconds</b>. Host types each answer fast and hits Enter.</li>
-          <li><b>${esc(who(1))}</b> leaves the room (or covers their ears!), then gets <b>25 seconds</b>.</li>
-          <li>Duplicate answers buzz. Say something different!</li></ol>
-        <button class="btn-gold jumbo" data-act="fmGo">${icon("bolt")} Start ${esc(who(0))}'s 20 seconds</button>
-      </section>`;
-    } else if (ph === "p1" || ph === "p2") {
-      const q = F.qs[F.qi];
-      body = `<section class="fm-live">
-        <div class="turn-line">${timerHTML()}<p class="say"><b>${esc(who(pl))}</b>, go go go!</p><span class="fm-count">${F.ans[pl].filter(x => x !== undefined).length}/5</span></div>
-        <div class="fm-q"><small>Question ${F.qi + 1}</small><h2>${esc(q.q)}</h2></div>
-        ${F.msg ? `<p class="flash-msg">${F.msg}</p>` : ""}
-        <form class="guess" data-submit="fmAnswer" autocomplete="off"><input id="guess" name="g" placeholder="Type the answer, Enter" enterkeyhint="next" autocapitalize="off" spellcheck="false"><button class="btn-gold" type="submit">Next</button></form>
-        <div class="host-row"><button class="btn-ghost" data-act="fmPass">Pass (come back later)</button></div>
-      </section>`;
-    } else {
-      const total = fmTotal();
-      body = `<section class="fm-reveal">
-        <div class="fm-total"><small>Total</small><b id="fmTotal">${F.total}</b><span>/ 200</span></div>
-        <div class="fm-board">${F.qs.map((q, qi) => `<div class="fm-row">
-          <span class="fm-qtext">${esc(q.q)}</span>
-          ${[0, 1].map(p => {
-            if (p === 1 && ph === "rev1") return `<span class="fm-cell empty"></span>`;
-            const vis = qi < F.shownRows[p];
-            const a = F.ans[p][qi], ix = F.pick[p][qi];
-            if (!vis) return `<span class="fm-cell covered"></span>`;
-            return `<button class="fm-cell ${ix >= 0 ? "hit" : "miss"}" data-act="fmFix" data-p="${p}" data-q="${qi}"><span>${esc(a || "(pass)")}</span><b>${ix >= 0 ? q.a[ix][1] : 0}</b></button>`; }).join("")}
-        </div>`).join("")}</div>
-        ${F.fix ? fixHTML() : ""}
-        <div class="fm-actions">${fmNextBtn(total)}</div>
-      </section>`;
-    }
-    root.innerHTML = `<main class="page game fm">${topBar("Fast Money", ph === "intro" ? "" : `${ph.endsWith("1") ? "Player 1" : "Player 2"}`)}${body}</main>`;
-    const gi = document.getElementById("guess"); if (gi) gi.focus();
-    const tEl = document.getElementById("fmTotal");
-    const tot = fmTotal(); if (tEl && tot !== F.total) { countUp(tEl, F.total, tot, 700); F.total = tot; }
-  }
-};
-function fixHTML() {
-  const { p, q } = F.fix, Q = F.qs[q];
-  return `<div class="fix-pop"><h4>Host: which answer did "${esc(F.ans[p][q] || "—")}" mean?</h4>
-    ${Q.a.map(([a, pts], i) => `<button data-act="fmSet" data-i="${i}" class="${F.pick[p][q] === i ? "on" : ""}">${esc(a)} <b>${pts}</b></button>`).join("")}
-    <button data-act="fmSet" data-i="-1" class="${F.pick[p][q] < 0 ? "on" : ""}">Not on board <b>0</b></button></div>`;
-}
-function fmNextBtn(total) {
-  const ph = F.phase, p = ph === "rev1" ? 0 : 1;
-  if (ph === "rev1" || ph === "rev2") {
-    if (F.shownRows[p] < 5) return `<button class="btn-gold jumbo" data-act="fmReveal">Survey says… (${F.shownRows[p] + 1}/5)</button>`;
-    if (ph === "rev1") return `<button class="btn-red jumbo" data-act="fmP2">Bring in Player 2: 25 seconds</button>`;
-    return `<button class="btn-gold jumbo" data-act="fmDone">${total >= 200 ? "WE DID IT!" : "See the result"}</button>`;
-  }
-  return "";
-}
-actions.fmTeam = el => { F.team = +el.dataset.t; F.p = [0, Math.min(1, S.teams[F.team].players.length - 1)]; audio.play("pop"); render(); };
-actions.fmPlayer = el => { const i = +el.dataset.i; if (F.p.includes(i)) return; F.p = [F.p[1], i]; audio.play("pop"); render(); };
-function fmStart(pl) {
-  F.phase = pl ? "p2" : "p1"; F.qi = 0; F.queue = [0, 1, 2, 3, 4]; F.msg = "";
-  F.qi = F.queue.shift();
-  render();
-  setTimer(pl ? 25 : 20, fmEndTurn, true);   // Fast Money is always timed
-}
-actions.fmGo = () => { audio.play("countdown"); fmStart(0); };
-actions.fmP2 = () => { audio.play("countdown"); fmStart(1); };
-function fmEndTurn() {
-  stopClock();
-  const pl = F.phase === "p2" ? 1 : 0;
-  for (let q = 0; q < 5; q++) if (F.ans[pl][q] === undefined) { F.ans[pl][q] = ""; F.pick[pl][q] = -1; }
-  F.phase = pl ? "rev2" : "rev1"; F.msg = "";
-  audio.play("gong"); render();
-}
-function fmAdvance() {
-  if (!F.queue.length) return fmEndTurn();
-  F.qi = F.queue.shift(); F.msg = ""; render();
-}
-actions.fmAnswer = f => {
-  const v = f.g.value.trim(), pl = F.phase === "p2" ? 1 : 0, q = F.qs[F.qi];
-  if (!v) return actions.fmPass();
-  const ix = matchAnswer(v, q.a);
-  if (pl === 1 && ix >= 0 && ix === F.pick[0][F.qi]) { audio.wrong(); audio.wrong(); F.msg = "DUPLICATE! Already said. Try again!"; render(); return; }
-  F.ans[pl][F.qi] = v; F.pick[pl][F.qi] = ix;
-  audio.play("pop");
-  fmAdvance();
-};
-actions.fmPass = () => {
-  const pl = F.phase === "p2" ? 1 : 0;
-  if (F.queue.length) { F.queue.push(F.qi); audio.play("whoosh", { vol: 0.5 }); fmAdvance(); }
-  else { F.ans[pl][F.qi] = ""; F.pick[pl][F.qi] = -1; fmAdvance(); }
-};
-actions.fmReveal = () => {
-  const p = F.phase === "rev1" ? 0 : 1, q = F.shownRows[p];
-  F.shownRows[p]++;
-  const ix = F.pick[p][q];
-  if (ix >= 0) { audio.play(ix === 0 ? "top" : "reveal"); } else audio.wrong();
-  render();
-};
-actions.fmFix = el => { F.fix = { p: +el.dataset.p, q: +el.dataset.q }; audio.play("pop"); render(); };
-actions.fmSet = el => { const { p, q } = F.fix; F.pick[p][q] = +el.dataset.i; F.fix = null; audio.play("star"); render(); };
-actions.fmDone = () => {
-  const total = fmTotal(), won = total >= 200;
-  S.rewards.stars += won ? 5 : 1; if (won) S.rewards.fastWins++; save();
-  go("results", { title: won ? "FAST MONEY WIN!" : `So close: ${total} points!`, sub: won ? `${esc(tName(F.team))} crushed the 200 target!` : "Run it back and beat 200!", scores: [total, 200], winner: won ? 0 : 1, kind: "fast", team: F.team });
-};
-
-/* =========================================================
-   BIBLE CHALLENGE ARCADE
-   ========================================================= */
-let A = null;
-actions.startArcade = () => {
-  audio.play("gong"); keepAwake();
-  const deck = shuffle(CHALLENGE_BANK).slice(0, 10).map(c => {
-    const order = shuffle(c.choices.map((_, i) => i));
-    return { ...c, choices: order.map(i => c.choices[i]), answer: order.indexOf(c.answer) };
-  });
-  A = { deck, i: 0, scores: [0, 0], picked: null, team: 0, streak: [0, 0] };
-  go("arcade"); arcadeTurn();   // arcade render is safe before the first turn (A is complete)
-};
-function arcadeTurn() { A.picked = null; render(); setTimer(20, () => arcadePick(-1)); }
-screens.arcade = {
-  enter() { audio.music("game"); },
-  render() {
-    const c = A.deck[A.i], t = solo() ? 0 : A.team;
-    root.innerHTML = `<main class="page game arcade">
-      ${topBar("Bible Challenge", `${A.i + 1}/${A.deck.length}`)}
-      <section class="scorebar ${solo() ? "solo" : ""}">${(solo() ? [0] : [0, 1]).map(k => `<div class="score-team team-${k} ${k === t ? "lit" : ""}"><div class="st-name">${esc(tName(k))}</div><div class="st-score">${A.scores[k]}</div>${A.streak[k] >= 2 ? `<div class="streak">${A.streak[k]} in a row!</div>` : ""}</div>`).join("")}</section>
-      <section class="quiz-card">
-        <div class="turn-line">${timerHTML()}<span class="q-tag">${esc(c.type)} · 10 pts${A.streak[t] >= 2 ? " + streak bonus" : ""}</span></div>
-        <h2>${esc(c.q)}</h2>
-        <div class="choices ${c.choices.length === 2 ? "two" : ""}">${c.choices.map((ch, i) => {
-          const cls = A.picked === null ? "" : i === c.answer ? "correct" : i === A.picked ? "wrong" : "dim";
-          return `<button class="choice ${cls}" data-act="arcadePick" data-i="${i}" ${A.picked !== null ? "disabled" : ""}><b>${"ABCD"[i]}</b><span>${esc(ch)}</span></button>`; }).join("")}</div>
-        ${A.picked !== null ? `<p class="note">${A.picked === c.answer ? "Correct! " : A.picked === -1 ? "Time's up! " : "Not quite. "}${esc(c.note)}</p>
-          <button class="btn-gold jumbo" data-act="arcadeNext">${A.i === A.deck.length - 1 ? "Final results" : `Next: ${solo() ? "question" : esc(tName(1 - t))} ${icon("play")}`}</button>` : `<p class="say">${solo() ? "Pick the right answer!" : `<b>${esc(tName(t))}</b>, ${esc(pName(t, Math.floor(A.i / 2)))} answers!`}</p>`}
-      </section>
-    </main>`;
-  },
-  key(e) { const k = "abcd".indexOf(e.key.toLowerCase()); if (k >= 0 && A?.picked === null && k < A.deck[A.i].choices.length) arcadePick(k); }
-};
-function arcadePick(i) {
-  if (A.picked !== null) return;
-  stopClock();
-  const c = A.deck[A.i], t = solo() ? 0 : A.team;
-  A.picked = i;
-  if (i === c.answer) {
-    A.streak[t]++; A.scores[t] += 10 + (A.streak[t] >= 3 ? 5 : 0);
-    audio.play("right"); confetti(50, { x: 0.5, y: 0.5 });
-  } else { A.streak[t] = 0; i === -1 ? audio.play("timeup") : (audio.play("oops"), audio.wrong()); }
-  render();
-}
-actions.arcadePick = el => arcadePick(+el.dataset.i);
-actions.arcadeNext = () => {
-  if (A.i === A.deck.length - 1) {
-    const sc = A.scores; S.rewards.stars += 2; S.rewards.games++;
-    S.rewards.arcadeBest = Math.max(S.rewards.arcadeBest, ...sc); save();
-    const w = solo() ? 0 : sc[0] === sc[1] ? null : sc[0] > sc[1] ? 0 : 1;
-    return go("results", { title: solo() ? `${sc[0]} points!` : w === null ? "It's a TIE!" : `${esc(tName(w))} WIN!`, sub: "Bible Challenge complete", scores: solo() ? [sc[0]] : sc, winner: w, kind: "arcade" });
-  }
-  A.i++; if (!solo()) A.team = 1 - A.team; audio.play("whoosh", { vol: 0.5 }); arcadeTurn();
-};
-
-/* =========================================================
-   HOW TO PLAY + TROPHY ROOM
+   HOW TO PLAY
    ========================================================= */
 screens.how = {
   render() {
     const steps = [
-      ["The host", "One grown-up runs the device. Cast it to a TV, or set a tablet where everyone can see. Peek at answers anytime with <b>Host key</b>."],
-      ["Face-off", "One player from each team slaps their giant BUZZ button. The fastest answers first. Hit the #1 answer and you win control instantly."],
-      ["Play or Pass", "The face-off winner chooses to play the board or pass it to the other team."],
-      ["Fill the board", "Teammates take turns. The host taps the matching tile, or types the answer and the game matches it, typos and all."],
-      ["Strikes & steals", "A wrong answer or running out of time = a strike. After 3 strikes the other team huddles for ONE steal answer to take the whole bank."],
-      ["Bigger points", "Later rounds are worth double, and the final round is triple. Anyone can come back!"],
-      ["Fast Money", "Two players, five questions, 20 and 25 seconds. Reach 200 combined points to win. Repeat an answer and you'll hear the buzzer!"],
-      ["Keyboard", "On a laptop: <kbd>A</kbd> / <kbd>L</kbd> buzzers · <kbd>1</kbd>–<kbd>6</kbd> reveal a tile · <kbd>X</kbd> strike · <kbd>Enter</kbd> check a typed answer."]
+      [icon("phone"), "Set up", "Open the game on a laptop, tablet or smart TV, or cast your phone to the TV. Type your two team names."],
+      [icon("star"), "Phones are buzzers", "Players scan the big code to join a team. In each face-off, two players' phones light up with a BUZZ button. Fastest finger answers!"],
+      [icon("key"), "The host's secret remote", "The host scans the small code. Their phone shows every answer privately and has the buttons: reveal, ✕ strike, play/pass, next."],
+      [icon("bolt"), "No phones? Still works", "The face-off players race to slap the table. The host taps who was first, taps tiles to reveal, and taps ✕ for a wrong answer."],
+      [icon("crown"), "Strikes & steals", "Three wrong answers and the other team gets ONE steal answer to take the whole bank. Later rounds score double, then triple."],
+      [icon("book"), "Fast Money & Bible Challenge", "Bonus games from the menu. Fast Money: two players, five questions, beat 200. Bible Challenge: Scripture multiple choice."]
     ];
-    root.innerHTML = `<main class="page info">${topBar("How to Play")}<section class="how-grid">${steps.map(([h, p], i) => `<article><b class="num">${i + 1}</b><h3>${h}</h3><p>${p}</p></article>`).join("")}</section>
-      <button class="btn-gold jumbo" data-act="startSurvey">${icon("play")} Let's play</button>
-      <p class="legal">Scripture quotations taken from The Holy Bible, New International Version® NIV®. Copyright © 1973, 1978, 1984, 2011 by Biblica, Inc.™ Used by permission. All rights reserved worldwide.<br>
-      Christmas Bible Survey Showdown is an original game by Bible Explorer Kids and is not affiliated with or endorsed by any television program. Point values are for entertainment, not real survey results.</p></main>`;
-  }
-};
-screens.rewards = {
-  render() {
-    const r = S.rewards;
-    const badges = [["First Star", r.stars >= 1], ["Christmas Champion", r.wins >= 1], ["Fast Money 200", r.fastWins >= 1], ["Perfect Board", r.perfect >= 1], ["Star Collector: 25", r.stars >= 25], ["Party Legend: 10 games", r.games >= 10]];
-    root.innerHTML = `<main class="page info">${topBar("Trophy Room", "Saved on this device")}
-      <section class="trophy-stats">
-        <article>${icon("star")}<b>${r.stars}</b><span>Stars</span></article>
-        <article>${icon("crown")}<b>${r.wins}</b><span>Showdown wins</span></article>
-        <article>${icon("bolt")}<b>${r.fastWins}</b><span>Fast Money wins</span></article>
-        <article>${icon("trophy")}<b>${r.bestSolo}</b><span>Best solo score</span></article>
-      </section>
-      <section class="badges">${badges.map(([n, on]) => `<span class="badge ${on ? "earned" : ""}">${icon(on ? "star" : "x")}${n}</span>`).join("")}</section>
-    </main>`;
+    stage.innerHTML = `<div class="scene how">${rays()}<h1 class="how-title">How to Play</h1>
+      <div class="how-grid">${steps.map(([ic, h, p], i) => `<article style="--d:${i}">${ic}<h3>${h}</h3><p>${p}</p></article>`).join("")}</div>
+      <p class="legal">Scripture quotations taken from The Holy Bible, New International Version® NIV®. Copyright © 1973, 1978, 1984, 2011 by Biblica, Inc.™ Used by permission. All rights reserved worldwide. · An original Bible Explorer Kids game, not affiliated with any TV program. Point values are for fun, not real survey results.</p>
+      <button class="btn gold xl" data-act="lobby" data-v="survey">${icon("play")} Let's play</button>
+      <button class="back-btn" data-act="home">${icon("home")}</button></div>`;
   }
 };
 
 /* =========================================================
-   Boot
+   PHONE VIEWS
    ========================================================= */
+function playerView(pid) {
+  const me = roster.find(p => p.pid === pid);
+  const base = { screen, teams: [tName(0), tName(1)], scores: G && screen === "survey" ? G.scores : A && screen === "arcade" ? A.scores : screen === "results" && R?.scores?.length === 2 ? R.scores : [0, 0], team: me?.team ?? null, name: me?.name || "" };
+  let status = "Watch the TV!", buzz = "off", tone = "idle";
+  if (screen === "lobby") status = me?.team === null || me?.team === undefined ? "Pick your team!" : "You're in! Waiting for the host to start…";
+  if (screen === "survey" && G) {
+    const fp = me && me.team !== null ? faceoffPlayer(me.team) : null;
+    if (G.stage === "faceoff") {
+      if (me && fp && fp.pid === pid) { buzz = "ready"; status = "YOU'RE IN THE FACE-OFF!"; tone = "hot"; }
+      else status = fp ? `${fp.name} is in the face-off. Cheer!` : "Face-off! Watch the TV";
+    } else if (G.stage === "faceoffAnswer") {
+      const t = G.fo.order[0];
+      if (G.fo.buzzPid === pid) { buzz = "won"; status = "You buzzed first! Say your answer!"; tone = "win"; }
+      else if (fp?.pid === pid) { buzz = "lost"; status = `${tName(t)} was faster!`; }
+      else status = `${tName(t)} buzzed in!`;
+    } else if (G.stage === "play") {
+      const tp = turnPlayer(G.control);
+      if (tp?.pid === pid) { status = "YOUR TURN! Say an answer out loud!"; tone = "hot"; }
+      else status = me?.team === G.control ? "Your team is playing! Help them out." : `${tName(G.control)} is playing.`;
+    } else if (G.stage === "steal") status = me?.team === 1 - G.control ? "STEAL! Huddle with your team. One answer!" : `${tName(1 - G.control)} is trying to steal!`;
+    else if (G.stage === "choose") status = `${tName(G.fo.winner)} won the face-off!`;
+    else if (G.stage === "roundEnd" || G.stage === "award" || G.stage === "reveal") status = G.awardMsg;
+  }
+  if (screen === "results") status = R?.title || "Game over!";
+  return { ...base, status, buzz, tone };
+}
+function hostView() {
+  const v = { screen, teams: [tName(0), tName(1)] };
+  if (screen === "survey" && G) Object.assign(v, {
+    q: G.round.q, mult: G.mult, round: G.ri + 1, rounds: G.deck.length, scores: G.scores, bank: G.bank, strikes: G.strikes, stage: G.stage, pending: G.pending,
+    answers: G.round.a.map(([t, p], i) => ({ t, p: p * G.mult, r: G.revealed.includes(i) })),
+    canReveal: LIVE.includes(G.stage), prompt: prompt().replace(/<[^>]+>/g, ""), controls: hostControls()
+  });
+  if (screen === "fast" && F) Object.assign(v, { stage: F.phase, prompt: F.phase.startsWith("p") ? `${fmPlayer(F.phase === "p2" ? 1 : 0)} · Q${F.qi + 1}: ${F.qs[F.qi].q}` : "Fast Money", controls: fmControls(), total: fmTotal() });
+  if (screen === "arcade" && A) { const c = A.deck[A.i]; Object.assign(v, { q: c.q, prompt: `${tName(A.team)} answering`, choices: c.choices.map((t, i) => ({ t, ok: i === c.answer })), picked: A.picked, controls: A.picked === null ? c.choices.map((t, i) => ({ a: "arcPick", v: i, label: `${"ABCD"[i]}. ${t}${i === c.answer ? "  ★" : ""}`, kind: i === c.answer ? "ans ok" : "ans" })) : [{ a: "arcNext", label: "Next question ▶", kind: "gold" }] }); }
+  if (screen === "results") v.controls = [{ a: "again", label: "Play again", kind: "gold" }, ...(R?.kind === "survey" ? [{ a: "fastFromResults", label: "Fast Money", kind: "red" }] : []), { a: "menu", label: "Menu", kind: "ghost" }];
+  if (screen === "lobby") v.controls = [{ a: "startGameRemote", label: "Start the show ▶", kind: "gold" }];
+  return v;
+}
+/* ================= misc ================= */
+let wakeLock = null;
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && wakeLock) keepAwake(); });
+
+/* boot */
 startSnow();
-go("cover");
+history.replaceState({ screen: "cover" }, "");
+screen = "cover"; document.body.dataset.screen = "cover";
+document.getElementById("cover").hidden = false;
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js");
-window.__CSS = { S, get G() { return G; }, go };   // debug handle
+window.__CSS = { S, get G() { return G; }, get F() { return F; }, get A() { return A; }, get room() { return room; }, go, act };
