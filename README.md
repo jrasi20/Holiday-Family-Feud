@@ -1,48 +1,26 @@
 # Christmas Bible Survey Showdown
 
-A responsive, installable holiday party game for families, churches, classrooms, and small groups. It blends Scripture-rooted Christmas content with funny general holiday surveys in an original game-show presentation.
+A game-show party game for families, churches and small groups: a QR-code companion to the Bible Explorer Kids printable.
 
-## Highlights
+**No build step.** The whole site is plain HTML/CSS/JS in `docs/`, which GitHub Pages serves directly.
 
-- 28 six-answer survey boards; every board totals 100 base points
-- A fresh shuffled deck whenever a new showdown begins
-- Recent-board avoidance to reduce repetition between games
-- Face-off buzzers, play/pass, animated reveals, strikes, steals, and single/double/triple scoring
-- Easy, Classic, and Expert difficulty
-- Solo Spotlight and ten-player Party Room modes
-- Party Room launch lock until all ten seats have checked in and readied up
-- Automatic face-off, turn, challenge, and Fast Money countdowns with named-player prompts
-- Five saved player names on each team
-- Prophecy, trivia, Who Said It?, and timeline challenges
-- Shuffled Fast Money bank with separate 20- and 25-second player turns
-- Sound, vibration, full-screen strike effects, persistent rewards, and home-screen installation
-- Responsive Android/iOS portrait and landscape layouts
+## Files
+- `docs/index.html`: entry page
+- `docs/js/app.js`: screens and game logic (Showdown, Fast Money, Bible Challenge, results, trophies)
+- `docs/js/data.js`: **all questions** (44 survey boards, 25 Fast Money, 31 Bible Challenge). Edit here.
+- `docs/js/match.js`: forgiving typed-answer matcher (typos, plurals, synonyms)
+- `docs/js/audio.js`: sound engine (SFX + music; built-in synth carols when no music file exists)
+- `docs/js/fx.js`: snow, confetti, strike X overlays
+- `docs/assets/`: images, `audio/` sound effects, `music/` background tracks
+- `ASSETS_NEEDED_FROM_JANE.md`: optional art and music that upgrades the look automatically
 
-## How to play
-
-1. Enter two team names and five player names per team. Player 1 is the captain.
-2. Choose Solo Spotlight or Party Room, then choose difficulty, Bible/Holiday/Mixed bank, and game length.
-3. In Party Room, every player taps their seat once to check in and again to ready up. The Showdown button remains locked until all ten seats are ready.
-4. At each face-off, the displayed player from each team presses their buzzer. The host reveals the answer and the higher response chooses **Play** or **Pass**.
-5. Follow the illuminated player prompt. Turn clocks start automatically; a timeout triggers a strike. The host taps a matching answer to reveal it or taps **Not on board — Strike**.
-6. After the allowed strikes, the opposing team gets one timed steal answer. A correct answer wins the entire round bank; a miss returns the bank to the original team.
-7. Early rounds are single points, middle rounds double, and final rounds triple. Highest score wins.
-8. In Fast Money, two teammates answer five questions separately. Player 1 has 20 seconds, Player 2 has 25 seconds, and 200 combined points wins.
-
-For the best party setup, cast the host device to a TV or place a tablet between the teams. This release is a shared-device game: team names, rosters, scores, and rewards are stored locally in the browser and no account or personal data is sent to a server.
-
-## Development
-
-```bash
-pnpm install
-pnpm dev
-pnpm build
+## Run locally
 ```
+python -m http.server 5173 --directory docs
+```
+then open http://localhost:5173
 
-The production build is written to `docs/` for GitHub Pages.
+## Updating the live game
+After editing, bump `CACHE` in `docs/sw.js` and the `?v=` numbers in `docs/index.html` so phones pick up the new version.
 
-Run `pnpm test` to execute the presence suite, including 500 isolated ten-player rooms (5,000 simulated player seats).
-
-## Original-product note
-
-This project uses original branding and artwork. Gameplay point values are entertainment values, not scientific survey results. It is not affiliated with or endorsed by any television game-show owner.
+Original game. Not affiliated with or endorsed by any television program.

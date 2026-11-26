@@ -54,3 +54,5 @@ next-env.d.ts
 /eslint.config.mjs
 /tsconfig.json
 /package-lock.json
+_source_assets/
+.claude/
