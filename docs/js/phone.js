@@ -31,7 +31,7 @@ function connect() {
   client = new Client({
     code, role, key: hostKey,
     onStatus: s => { link = s; render(); },
-    onState: s => { const prev = state; state = s; react(prev, s); if (!s.answer) sent = false; render(); },
+    onState: s => { const prev = state; state = s; react(prev, s); if (!s.answer || prev?.q !== s.q) sent = false; render(); },
     onMessage: m => { if (m.t === "result") showResult(m); }
   });
   client.name = store.get("name", "");
@@ -87,6 +87,7 @@ function renderPlayer() {
   const prevBox = $("#ans"), typed = prevBox?.value || "", hadFocus = document.activeElement === prevBox;
   app.className = `screen player ${team === 0 ? "t0" : team === 1 ? "t1" : ""} tone-${s.tone || "idle"}`;
   if (s.answer) return renderAnswer(s, teams, typed, hadFocus);
+  if (s.mode === "arcade" && s.choices) return renderChoices(s, teams);
   const btn = s.buzz === "ready" ? `<button class="buzzer live" id="bz"><span>BUZZ!</span></button>`
     : s.buzz === "won" ? `<div class="buzzer won"><span>FIRST!</span></div>`
     : s.buzz === "lost" ? `<div class="buzzer lost"><span>Too slow</span></div>`
@@ -95,6 +96,7 @@ function renderPlayer() {
     <header class="p-top"><div class="me"><small>${esc(teams[team] || "")}</small><b>${esc(s.name || store.get("name", ""))}</b></div>
       <div class="mini-score"><span class="s0">${s.scores?.[0] ?? 0}</span><span class="s1">${s.scores?.[1] ?? 0}</span></div></header>
     <p class="status">${esc(s.status || (link === "connected" ? "Connected!" : "Connecting…"))}</p>
+    ${s.q ? `<div class="ans-q small-q">${esc(s.q)}</div>` : ""}
     <div class="buzz-wrap">${btn}</div>
     <footer class="p-foot">${linkLine()}<button class="link" id="sw">Switch team</button></footer>`;
   const bz = $("#bz");
@@ -109,13 +111,13 @@ function renderAnswer(s, teams, typed, hadFocus) {
   app.innerHTML = `
     <header class="p-top"><div class="me"><small>${esc(teams[s.team] || "")}</small><b>${esc(s.name || "")}</b></div>
       <div class="mini-score"><span class="s0">${s.scores?.[0] ?? 0}</span><span class="s1">${s.scores?.[1] ?? 0}</span></div></header>
-    <p class="status">${esc(sent || s.pending ? "Survey says…" : s.status)}</p>
+    <p class="status">${esc(sent || s.pending ? (s.mode === "fast" ? "Locked in!" : "Survey says…") : s.status)}</p>
     <div class="ans-q">${esc(s.q || "")}</div>
     <form id="af" class="ans-form ${sent || s.pending ? "waiting" : ""}" autocomplete="off">
       <input id="ans" maxlength="60" placeholder="Type your answer" value="${esc(typed)}" ${sent || s.pending ? "disabled" : ""} enterkeyhint="send" autocapitalize="sentences" spellcheck="false">
       <div class="ans-row">
-        ${SR ? `<button type="button" id="mic" class="mic-btn ${listening ? "on" : ""}" ${sent || s.pending ? "disabled" : ""}><svg class="mic-ico" viewBox="0 0 24 24"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><b>${listening ? "Listening…" : "Say it"}</b></button>` : ""}
-        <button class="send-btn" ${sent || s.pending ? "disabled" : ""}>${sent || s.pending ? "Checking…" : "Send ▶"}</button>
+        ${true ? `<button type="button" id="mic" class="mic-btn ${listening ? "on" : ""} ${SR ? "" : "nosr"}" ${sent || s.pending ? "disabled" : ""}><svg class="mic-ico" viewBox="0 0 24 24"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><b>${listening ? "Listening…" : "Say it"}</b></button>` : ""}
+        <button class="send-btn" ${sent || s.pending ? "disabled" : ""}>${sent || s.pending ? (s.mode === "fast" ? "Next…" : "Checking…") : (s.mode === "fast" ? "Lock in ▶" : "Send ▶")}</button>
       </div>
     </form>
     <footer class="p-foot">${linkLine()}</footer>`;
@@ -132,7 +134,7 @@ function sendAnswer(text) {
 }
 function toggleMic() {
   unlock();
-  if (!SR) return;
+  if (!SR) { toast("Voice answers work in Chrome (Android) or Safari (iPhone). Please type your answer!"); return; }
   if (listening) { try { recog?.stop(); } catch {} return; }
   recog = new SR(); recog.lang = "en-US"; recog.interimResults = true; recog.maxAlternatives = 3;
   recog.onresult = ev => {
@@ -144,6 +146,23 @@ function toggleMic() {
   recog.onerror = e => { listening = false; if (e.error === "not-allowed") alert("Please allow the microphone, or type your answer."); render(); };
   listening = true; vib(30); render();
   try { recog.start(); } catch { listening = false; render(); }
+}
+
+/* ---------- Bible Challenge: tap an option ---------- */
+function renderChoices(s, teams) {
+  const locked = s.choices.every(c => c.state === "locked");
+  app.innerHTML = `
+    <header class="p-top"><div class="me"><small>${esc(teams[s.team] || "")}</small><b>${esc(s.name || "")}</b></div>
+      <div class="mini-score"><span class="s0">${s.scores?.[0] ?? 0}</span><span class="s1">${s.scores?.[1] ?? 0}</span></div></header>
+    <p class="status">${esc(s.status)}</p>
+    <div class="ans-q">${esc(s.q || "")}</div>
+    <div class="choice-list">${s.choices.map((c, i) => `<button class="opt ${c.state}" data-i="${i}" ${c.state ? "disabled" : ""}><em>${"ABCD"[i]}</em><span>${esc(c.t)}</span></button>`).join("")}</div>
+    <footer class="p-foot">${locked ? `<p class="muted small">Only the answering team can pick</p>` : ""}${linkLine()}</footer>`;
+  app.querySelectorAll(".opt[data-i]").forEach(b => b.onclick = () => { if (b.disabled) return; unlock(); vib(40); client.send({ t: "pick", i: +b.dataset.i }); app.querySelectorAll(".opt").forEach(x => x.disabled = true); b.classList.add("chosen"); });
+}
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 400); }, 3200);
 }
 
 /* ---------- CORRECT / INCORRECT result screen ---------- */
@@ -185,7 +204,8 @@ function renderHost() {
       ${s.stage === "roundEnd" ? `<p class="muted small">Tap answers to reveal them on the TV</p>` : ""}
       ${s.canReveal && s.stage !== "roundEnd" ? `<button class="h-strike" data-a="strike" ${s.pending ? "disabled" : ""}>✕ NOT ON THE BOARD</button><p class="muted small">${"✕".repeat(s.strikes)}${"·".repeat(Math.max(0, 3 - s.strikes))} strikes</p>` : ""}`;
   } else if (s.screen === "fast" || s.screen === "arcade") {
-    body = `<p class="h-prompt">${esc(s.prompt || "")}</p>${s.total !== undefined ? `<div class="h-score"><span class="bank">Total <b>${s.total}</b> / 200</span></div>` : ""}`;
+    body = `<p class="h-prompt">${esc(s.prompt || "")}</p>${s.total !== undefined ? `<div class="h-score"><span class="bank">Total <b>${s.total}</b> / 200</span></div>` : ""}
+      ${s.fmAnswers ? `<div class="h-q">Survey answers (only you can see these):<br>${s.fmAnswers.map(esc).join(" · ")}</div>` : ""}`;
   } else body = `<p class="h-prompt">${s.screen === "lobby" ? "Players are joining. Start when everyone's in!" : "Use the TV to choose a game."}</p>`;
   app.innerHTML = `<header class="h-top"><b>Host Remote</b><small>Answers are only on your phone</small></header>
     ${body}

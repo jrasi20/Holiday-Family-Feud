@@ -1,5 +1,5 @@
-﻿const CACHE = "bible-showdown-v6";
-const CORE = ["./", "./index.html", "./play.html", "./css/tv.css?v=6", "./css/phone.css?v=6", "./js/app.js?v=6", "./js/phone.js?v=6", "./js/net.js", "./js/match.js", "./js/data.js", "./js/audio.js", "./js/fx.js", "./assets/cover.jpg", "./assets/cover-wide.jpg", "./assets/logo-title.webp", "./assets/stage-bg.jpg", "./manifest.webmanifest"];
+﻿const CACHE = "bible-showdown-v7";
+const CORE = ["./", "./index.html", "./play.html", "./css/tv.css?v=7", "./css/phone.css?v=7", "./js/app.js?v=7", "./js/phone.js?v=7", "./js/net.js", "./js/match.js", "./js/data.js", "./js/audio.js", "./js/fx.js", "./assets/cover.jpg", "./assets/cover-wide.jpg", "./assets/logo-title.webp", "./assets/stage-bg.jpg", "./assets/music/lobby.mp3", "./assets/music/game.mp3", "./manifest.webmanifest"];
 
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE).catch(() => {}))); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));

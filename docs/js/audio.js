@@ -2,15 +2,17 @@
 // SFX = mp3 buffers. Music = docs/assets/music/<track>.mp3 if present,
 // otherwise a built-in synthesized public-domain carol, so the game is never silent.
 
-const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown","incorrect"];
-const VO = ["vo-survey-says","vo-top-answer","vo-steal","vo-fast-money","vo-winner","vo-round","vo-welcome","vo-congrats"];
+const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown","incorrect","chime","ooh","buzzer","clock"];
+const VO = ["vo-survey-says","vo-top-answer","vo-steal","vo-fast-money","vo-winner","vo-round","vo-welcome","vo-congrats","vo-great","vo-better-luck","vo-try-again",
+  "vo-lobby","vo-faceoff","vo-buzzed","vo-play-or-pass","vo-strike1","vo-strike2","vo-strike3","vo-board-cleared","vo-steal-success","vo-final-round","vo-next-round","vo-times-up","vo-fm-reveal","vo-duplicate"];   // optional: play when the file exists
 // music files are loudness-normalized to -16 LUFS, so these are true relative levels
-const MUSIC_VOL = { menu: 0.42, game: 0.26, round: 0.24, win: 0.5, fastmoney: 0.3 };
+const MUSIC_VOL = { menu: 0.42, lobby: 0.38, game: 0.3, round: 0.3, win: 0.5, fastmoney: 0.32 };
+const MUSIC_FILE = { fastmoney: "round" };   // Fast Money reuses the drum loop
 
 let ctx = null, master, sfxBus, musicBus;
 const buffers = {};
 let musicNode = null, musicTrack = null, synthTimer = null;
-let sfxOn = true, musicOn = true;
+let sfxOn = true, musicOn = true, clockNode = null;
 
 const load = async (url) => {
   try {
@@ -64,8 +66,9 @@ export const audio = {
     return true;
   },
 
-  buzzer(team = 0) {           // face-off buzz-in: chunky two-tone
+  buzzer(team = 0) {           // face-off buzz-in (Jane's buzzer; synth only if missing)
     if (!ctx || !sfxOn) return;
+    if (buffers.buzzer) { this.play("buzzer", { rate: team ? 1.06 : 1 }); vibrate(80); return; }
     const t = ctx.currentTime, base = team ? 330 : 262;
     [base, base * 1.5].forEach((f, i) => tone(f, t + i * 0.005, 0.45, "square", 0.12, 1400));
     vibrate(80);
@@ -73,10 +76,18 @@ export const audio = {
   wrong() {                    // incorrect-answer buzzer (Jane's recording; synth only if it failed to load)
     if (!ctx) { vibrate([90, 50, 90]); return; }
     if (sfxOn) {
-      if (buffers.incorrect) this.play("incorrect", { vol: 1 });
+      if (buffers.incorrect) { this.play("incorrect", { vol: 1 }); if (buffers.ooh) setTimeout(() => this.play("ooh", { vol: 0.7 }), 550); }
       else { const t = ctx.currentTime; tone(98, t, 0.75, "sawtooth", 0.22, 900); tone(104, t, 0.75, "square", 0.12, 700); }
     }
     vibrate([120, 60, 120]);
+  },
+  /* ticking clock bed under timed answers (loops until stopped) */
+  clock(on) {
+    if (clockNode) { try { clockNode.g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.08); clockNode.src.stop(ctx.currentTime + 0.4); } catch {} clockNode = null; }
+    if (!on || !ctx || !sfxOn || !buffers.clock) return;
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = buffers.clock; src.loop = true; g.gain.value = 0.55;
+    src.connect(g).connect(sfxBus); src.start(); clockNode = { src, g };
   },
   tick(urgent) {
     if (!ctx || !sfxOn) return;
@@ -101,13 +112,14 @@ export const audio = {
       if (buf) {
         const src = ctx.createBufferSource(), g = ctx.createGain(), now = ctx.currentTime, v = MUSIC_VOL[track] ?? 0.25;
         src.buffer = buf; src.loop = track !== "win";
+        if (src.loop) { const [a, b] = audibleBounds(buf); src.loopStart = a; src.loopEnd = b; }
         g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(v, now + 0.8);   // fade in
         src.connect(g).connect(musicBus); src.start();
         musicNode = { src, g };
       } else startSynth(track);
     };
     loadingGen = gen;
-    if (!musicLoads[track]) musicLoads[track] = load(`assets/music/${track}.mp3`);   // one download per track, ever
+    if (!musicLoads[track]) musicLoads[track] = load(`assets/music/${MUSIC_FILE[track] || track}.mp3`);   // one download per track, ever
     musicLoads[track].then(start);
   },
   stopMusic() { stopMusic(); musicTrack = null; musicGen++; }
@@ -233,4 +245,13 @@ function startSynth(track) {
   };
   pump();
   synthTimer = setInterval(pump, 60);
+}
+
+/* first/last audible sample (seconds), so short loops repeat without a gap */
+function audibleBounds(buf) {
+  const d = buf.getChannelData(0), n = d.length, th = 0.004;
+  let a = 0, b = n - 1;
+  while (a < n && Math.abs(d[a]) < th) a++;
+  while (b > a && Math.abs(d[b]) < th) b--;
+  return [a / buf.sampleRate, (b + 1) / buf.sampleRate];
 }
