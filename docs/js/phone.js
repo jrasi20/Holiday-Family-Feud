@@ -88,6 +88,8 @@ function renderPlayer() {
   const typed = keep ? prevBox.value : "", hadFocus = document.activeElement === prevBox;
   renderedQ = s.q;
   app.className = `screen player ${team === 0 ? "t0" : team === 1 ? "t1" : ""} tone-${s.tone || "idle"}`;
+  if (s.sketch?.artist) return renderDraw(s, teams);
+  app.dataset.mode = "";
   if (s.answer) return renderAnswer(s, teams, typed, hadFocus);
   if (s.mode === "arcade" && s.choices) return renderChoices(s, teams);
   if (s.pp) {
@@ -161,6 +163,85 @@ function toggleMic() {
   try { recog.start(); } catch { listening = false; render(); }
 }
 
+/* ---------- Christmas Sketch: the artist's drawing pad ---------- */
+const PENS = ["#14214a", "#d42a3c", "#1fa36b", "#2d64cc", "#8a5a14", "#f0b840", "#fffdf6"];   // last = eraser
+const SIZES = [0.006, 0.012, 0.024];
+let pen = PENS[0], size = SIZES[1], myStrokes = [], drawCv = null;
+function renderDraw(s, teams) {
+  const k = s.sketch;
+  app.className = `screen draw ${s.team === 1 ? "t1" : "t0"}`;
+  // keep the canvas alive between updates: only refresh the text
+  if (app.dataset.mode === "draw" && app.dataset.turn === k.turnId && app.dataset.stage === k.stage) {
+    $("#drawStatus").textContent = s.status; return;
+  }
+  const sameTurn = app.dataset.turn === k.turnId;
+  if (!sameTurn) myStrokes = [];
+  app.dataset.mode = "draw"; app.dataset.turn = k.turnId; app.dataset.stage = k.stage;
+  app.className = `screen draw ${s.team === 1 ? "t1" : "t0"}`;
+  const live = k.stage === "ready" || k.stage === "draw";
+  app.innerHTML = `
+    <div class="draw-word"><small id="drawStatus">${esc(s.status)}</small><b>${esc(k.word)}</b></div>
+    <div class="draw-pad ${live ? "" : "done"}"><canvas id="pad" width="800" height="500"></canvas>${!live ? `<div class="pad-over">${esc(s.status)}</div>` : ""}</div>
+    ${live ? `<div class="draw-tools">
+      <div class="pens">${PENS.map((c, i) => `<button class="pen ${pen === c ? "on" : ""} ${i === PENS.length - 1 ? "eraser" : ""}" style="background:${c}" data-pen="${c}" aria-label="${i === PENS.length - 1 ? "Eraser" : "Color"}"></button>`).join("")}</div>
+      <div class="sizes">${SIZES.map(z => `<button class="size ${size === z ? "on" : ""}" data-size="${z}"><i style="width:${Math.round(z * 900)}px;height:${Math.round(z * 900)}px"></i></button>`).join("")}
+        <button class="tool-btn" id="undo">Undo</button><button class="tool-btn" id="clear">Clear</button></div>
+      ${k.stage === "ready" ? `<button class="big-btn gold" id="go">Start drawing ▶</button>` : ""}
+      ${k.canSkip ? `<button class="link" id="skip">Too hard? Get a new word (once)</button>` : ""}
+    </div>` : ""}
+    <footer class="p-foot">${linkLine()}</footer>`;
+  drawCv = $("#pad");
+  paintAll();
+  if (!live) return;
+  app.querySelectorAll("[data-pen]").forEach(b => b.onclick = () => { pen = b.dataset.pen; app.querySelectorAll(".pen").forEach(x => x.classList.toggle("on", x === b)); vib(15); });
+  app.querySelectorAll("[data-size]").forEach(b => b.onclick = () => { size = +b.dataset.size; app.querySelectorAll(".size").forEach(x => x.classList.toggle("on", x === b)); vib(15); });
+  $("#undo").onclick = () => { myStrokes.pop(); paintAll(); client.send({ t: "undo" }); vib(20); };
+  $("#clear").onclick = () => { myStrokes = []; paintAll(); client.send({ t: "clear" }); vib(30); };
+  $("#go")?.addEventListener("click", () => { unlock(); client.send({ t: "sketchGo" }); vib(40); });
+  $("#skip")?.addEventListener("click", () => { client.send({ t: "sketchSkip" }); myStrokes = []; paintAll(); });
+  wirePad();
+}
+function paintAll() {
+  if (!drawCv) return;
+  const g = drawCv.getContext("2d"); g.fillStyle = "#fffdf6"; g.fillRect(0, 0, drawCv.width, drawCv.height);
+  myStrokes.forEach(s => paintStroke(s, 0));
+}
+function paintStroke(s, from) {
+  const g = drawCv.getContext("2d"), W = drawCv.width, H = drawCv.height;
+  g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = s.c; g.lineWidth = Math.max(2, s.w * W);
+  const p0 = s.pts[from]; if (!p0) return;
+  g.beginPath(); g.moveTo(p0[0] * W, p0[1] * H);
+  if (s.pts.length === 1) g.lineTo(p0[0] * W + 0.1, p0[1] * H + 0.1);
+  for (let i = from + 1; i < s.pts.length; i++) g.lineTo(s.pts[i][0] * W, s.pts[i][1] * H);
+  g.stroke();
+}
+/* touch drawing: points are sent in small batches so the TV draws along live */
+function wirePad() {
+  let cur = null, queue = [], timer = null;
+  const pt = e => { const r = drawCv.getBoundingClientRect(); return [+Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)).toFixed(4), +Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)).toFixed(4)]; };
+  const flush = (start = false) => {
+    if (!cur || !queue.length) return;
+    client.send({ t: "draw", id: cur.id, c: cur.c, w: cur.w, pts: queue, start });
+    queue = [];
+  };
+  drawCv.style.touchAction = "none";
+  drawCv.onpointerdown = e => {
+    e.preventDefault(); try { drawCv.setPointerCapture(e.pointerId); } catch {} unlock();
+    cur = { id: Math.random().toString(36).slice(2, 9), c: pen, w: size, pts: [pt(e)] };
+    myStrokes.push(cur); paintStroke(cur, 0);
+    queue = [cur.pts[0]]; flush(true);
+    clearInterval(timer); timer = setInterval(() => flush(), 45);
+  };
+  drawCv.onpointermove = e => {
+    if (!cur) return;
+    let evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];   // extra in-between points when the browser has them
+    if (!evs.length) evs = [e];
+    for (const ev of evs) { const p = pt(ev); cur.pts.push(p); queue.push(p); }
+    paintStroke(cur, Math.max(0, cur.pts.length - evs.length - 1));
+  };
+  drawCv.onpointerup = drawCv.onpointercancel = () => { flush(); clearInterval(timer); cur = null; };
+}
+
 /* ---------- Bible Challenge: tap an option ---------- */
 function renderChoices(s, teams) {
   const locked = s.choices.every(c => c.state === "locked");
@@ -191,7 +272,7 @@ function showResult(m) {
   } else if (m.kind === "wrong") {
     el.className = "result bad";
     el.innerHTML = `<div class="r-ico">✕</div><b>INCORRECT</b>${m.text ? `<span>“${esc(m.text)}”</span>` : ""}<small>${esc(m.msg || "Not on the board")}</small>
-      <div class="r-strikes">${Array.from({ length: Math.max(1, Math.min(3, m.strikes || 1)) }, () => "<i>✕</i>").join("")}</div><em>Strike ${m.strikes || 1}</em>`;
+      ${m.strikes ? `<div class="r-strikes">${Array.from({ length: Math.min(3, m.strikes) }, () => "<i>✕</i>").join("")}</div><em>Strike ${m.strikes}</em>` : ""}`;
     playFile("incorrect"); vib([200, 80, 200]);
   } else {
     el.className = "result again";
@@ -216,7 +297,7 @@ function renderHost() {
       <div class="h-answers">${s.answers.map((a, i) => `<button class="h-ans ${a.r ? "done" : ""}" data-a="reveal" data-v="${i}" ${a.r || !s.canReveal || s.pending ? "disabled" : ""} title="${s.stage === "roundEnd" ? "Reveal on TV (no points)" : "Award this answer"}"><em>${i + 1}</em><span>${esc(a.t)}</span><b>${a.p}</b></button>`).join("")}</div>
       ${s.stage === "roundEnd" ? `<p class="muted small">Tap answers to reveal them on the TV</p>` : ""}
       ${s.canReveal && s.stage !== "roundEnd" ? `<button class="h-strike" data-a="strike" ${s.pending ? "disabled" : ""}>✕ NOT ON THE BOARD</button><p class="muted small">${"✕".repeat(s.strikes)}${"·".repeat(Math.max(0, 3 - s.strikes))} strikes</p>` : ""}`;
-  } else if (s.screen === "fast" || s.screen === "arcade" || s.screen === "carol") {
+  } else if (s.screen === "fast" || s.screen === "arcade" || s.screen === "carol" || s.screen === "sketch") {
     body = `<p class="h-prompt">${esc(s.prompt || "")}</p>${s.total !== undefined ? `<div class="h-score"><span class="bank">Total <b>${s.total}</b> / 200</span></div>` : ""}
       ${s.fmAnswers ? `<div class="h-q">Survey answers (only you can see these):<br>${s.fmAnswers.map(esc).join(" · ")}</div>` : ""}`;
   } else body = `<p class="h-prompt">${s.screen === "lobby" ? "Players are joining. Start when everyone's in!" : "Use the TV to choose a game."}</p>`;

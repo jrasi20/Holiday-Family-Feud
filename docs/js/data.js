@@ -226,6 +226,50 @@ export const CAROLS = [
   {id:"what-child-is-this", title:"What Child Is This?", aliases:["what child is this","greensleeves"]}
 ];
 
+// Christmas Sketch (Pictionary): easy-to-draw words; aliases = other ways to say it
+export const SKETCH_WORDS = [
+  {w:"Star", a:["stars","star of bethlehem","bright star"]},
+  {w:"Manger", a:["crib","feeding trough","trough"]},
+  {w:"Angel", a:["angels","halo"]},
+  {w:"Camel", a:["camels"]},
+  {w:"Sheep", a:["lamb","lambs"]},
+  {w:"Donkey", a:["mule"]},
+  {w:"Shepherd", a:["shepherds","shepherd boy"]},
+  {w:"Crown", a:["crowns","king's crown"]},
+  {w:"Present", a:["gift","gifts","presents","box"]},
+  {w:"Candy cane", a:["candy canes","candycane"]},
+  {w:"Snowman", a:["snow man","frosty"]},
+  {w:"Christmas tree", a:["tree","pine tree","fir tree"]},
+  {w:"Stocking", a:["stockings","sock"]},
+  {w:"Wreath", a:["wreathes","reef"]},
+  {w:"Bell", a:["bells","jingle bell"]},
+  {w:"Candle", a:["candles"]},
+  {w:"Reindeer", a:["rudolph","deer","raindeer"]},
+  {w:"Sleigh", a:["sled","slay"]},
+  {w:"Ornament", a:["ornaments","bauble","ball"]},
+  {w:"Gingerbread man", a:["gingerbread","cookie man"]},
+  {w:"Snowflake", a:["snow flake","snowflakes"]},
+  {w:"Santa hat", a:["hat","santa's hat"]},
+  {w:"Mittens", a:["mitten","gloves"]},
+  {w:"Scarf", a:["scarves"]},
+  {w:"Fireplace", a:["chimney","fire"]},
+  {w:"Stable", a:["barn","shed"]},
+  {w:"Dove", a:["bird","pigeon"]},
+  {w:"Lantern", a:["lamp"]},
+  {w:"Holly", a:["holly leaves","berries"]},
+  {w:"Hot cocoa", a:["hot chocolate","cocoa","mug"]},
+  {w:"Christmas lights", a:["lights","string lights"]},
+  {w:"Elf", a:["elves"]},
+  {w:"Cookie", a:["cookies"]},
+  {w:"Sled", a:["sledge","toboggan"]},
+  {w:"Igloo", a:["ice house"]},
+  {w:"Penguin", a:["penguins"]},
+  {w:"Church", a:["chapel"]},
+  {w:"Bible", a:["book","holy bible"]},
+  {w:"Treasure chest", a:["chest","treasure","gold"]},
+  {w:"Baby in a manger", a:["baby jesus","baby","jesus"]}
+];
+
 export const shuffle = items => {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i--) {

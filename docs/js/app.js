@@ -1,7 +1,7 @@
 // Christmas Bible Survey Showdown: TV / HOST SCREEN
 // The TV is a 1600x900 broadcast stage scaled to fit. Phones join by QR:
 // players get team buzzers, the host gets a private answer remote.
-import { SURVEY_BANK, FAST_MONEY_BANK, CHALLENGE_BANK, CAROLS, shuffle } from "./data.js";
+import { SURVEY_BANK, FAST_MONEY_BANK, CHALLENGE_BANK, CAROLS, SKETCH_WORDS, shuffle } from "./data.js";
 import { audio } from "./audio.js";
 import { startSnow, confetti, confettiRain, countUp } from "./fx.js";
 import { Room, joinUrl } from "./net.js";
@@ -46,6 +46,7 @@ const I = {
   bolt: '<svg viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>',
   book: '<svg viewBox="0 0 24 24"><path d="M3 5.5C5.5 4 8.5 4 11.2 5.6V20c-2.7-1.6-5.7-1.6-8.2-.1zM12.8 5.6C15.5 4 18.5 4 21 5.5v14.4c-2.5-1.5-5.5-1.5-8.2.1z"/></svg>',
   info: '<svg viewBox="0 0 24 24"><circle class="ln" cx="12" cy="12" r="9.5"/><path class="ln" d="M12 11v6"/><circle cx="12" cy="7.5" r="1.3"/></svg>',
+  edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path class="ln" d="M13.5 6.5l4 4"/></svg>',
   phone: '<svg viewBox="0 0 24 24"><rect class="ln" x="6.5" y="2.5" width="11" height="19" rx="2.5"/><circle cx="12" cy="18" r="1.1"/></svg>',
   key: '<svg viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><path class="ln" d="M12 12h9M18 12v3.5M15.5 12v2.5"/></svg>',
   crown: '<svg viewBox="0 0 24 24"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/></svg>',
@@ -208,6 +209,18 @@ const remoteOn = () => !!room?.hostRemote;
 
 function onPhone(m, pid) {
   if (m.t === "hello") { syncPhones(); if (m.role === "host") { audio.play("star"); if (screen !== "lobby") render(); } return; }
+  if (screen === "sketch" && K) {
+    const me = roster.find(p => p.pid === pid);
+    if (pid === K.drawerPid) {
+      if (m.t === "draw") return sketchStroke(m);
+      if (m.t === "undo") return sketchUndo();
+      if (m.t === "clear") return sketchClear();
+      if (m.t === "sketchGo") return sketchStart();
+      if (m.t === "sketchSkip") return sketchSkip();
+    }
+    if (m.t === "answer" && me && pid !== K.drawerPid && ((K.stage === "draw" && me.team === K.team) || (K.stage === "steal" && me.team === 1 - K.team)))
+      return sketchGuess(String(m.text || "").slice(0, 40), me, (m.alts || []).slice(0, 4).map(String));
+  }
   if (screen === "carol" && C) {
     const me = roster.find(p => p.pid === pid);
     if (m.t === "buzz" && me && me.team !== null) return carolBuzz(me.team, pid);
@@ -282,6 +295,7 @@ screens.home = {
           <button class="mini-btn" data-act="lobby" data-v="fast">${icon("bolt")}<b>Fast Money</b></button>
           <button class="mini-btn" data-act="lobby" data-v="arcade">${icon("book")}<b>Bible Challenge</b></button>
           <button class="mini-btn" data-act="lobby" data-v="carol">${icon("music")}<b>Name That Carol</b></button>
+          <button class="mini-btn" data-act="lobby" data-v="sketch">${icon("edit")}<b>Christmas Sketch</b></button>
           <button class="mini-btn" data-act="how">${icon("info")}<b>How to Play</b></button>
         </div>
       </div>
@@ -332,7 +346,7 @@ screens.lobby = {
     const ready = linkStatus === "ready" && room?.code;
     const url = ready ? joinUrl(room.code) : "";
     const hostUrl = ready ? joinUrl(room.code, room.key) : "";
-    const title = { survey: "Survey Showdown", fast: "Fast Money", arcade: "Bible Challenge", carol: "Name That Carol" }[nextGame];
+    const title = { survey: "Survey Showdown", fast: "Fast Money", arcade: "Bible Challenge", carol: "Name That Carol", sketch: "Christmas Sketch" }[nextGame];
     stage.innerHTML = `
     <div class="scene lobby">
       ${rays()}
@@ -372,6 +386,7 @@ actions.startGame = () => {
   S.teams.forEach((t, i) => { t.name = (t.name || "").trim() || (i ? "Nazareth" : "Bethlehem"); }); save();
   if (nextGame === "fast") return startFast();
   if (nextGame === "carol") return startCarol();
+  if (nextGame === "sketch") return startSketch();
   if (nextGame === "arcade") return startArcade();
   startSurvey();
 };
@@ -475,6 +490,7 @@ function act(a, v) {
   if (screen === "fast" && F) { if (a === "listen") return listenTV(); return fastAct(a, v); }
   if (screen === "arcade" && A) return arcadeAct(a, v);
   if (screen === "carol" && C) return carolAct(a, v);
+  if (screen === "sketch" && K) return sketchAct(a, v);
   if (screen === "results") { if (a === "again") return actions.again(); if (a === "fastFromResults") return actions.fastFromResults(); if (a === "menu") return go("home"); }
 }
 actions.act = (v) => { const [a, val] = v.split(":"); act(a, val); };
@@ -611,10 +627,11 @@ function tvSubmit(v, alts = []) {
   if (screen === "survey" && G) { const a = answerer(); submitAnswer(v, a?.pid ? roster.find(p => p.pid === a.pid) : null, alts); }
   else if (screen === "fast" && F) fmSubmit(v, null, alts);
   else if (screen === "carol" && C) carolGuess(v, alts);
+  else if (screen === "sketch" && K) sketchGuess(v, null, alts);
 }
 function listenTV() {
   if (!SR) { card(`<div class="banner-card"><b>Voice answers</b><small>Use Chrome, Edge or Safari to answer by voice. Typing works everywhere!</small></div>`, "banner", 2600); return; }
-  const ok = (screen === "survey" && G && LIVE.includes(G.stage)) || (screen === "fast" && F && fmLive()) || (screen === "carol" && C?.stage === "answer");
+  const ok = (screen === "survey" && G && LIVE.includes(G.stage)) || (screen === "fast" && F && fmLive()) || (screen === "carol" && C?.stage === "answer") || (screen === "sketch" && ["draw", "steal"].includes(K?.stage));
   if (!ok) return;
   if (listening) { try { recog?.stop(); } catch {} return; }
   recog = new SR(); recog.lang = "en-US"; recog.interimResults = true; recog.maxAlternatives = 3;
@@ -1097,7 +1114,7 @@ function carolJudge(ok) {
     return carolReveal(true, t, pts);
   }
   audio.wrong(); setTimeout(() => audio.play("gasp", { vol: 0.7 }), 500);
-  if (pid && room) room.sendTo(pid, { t: "result", kind: "wrong", text: C.said, strikes: 1, msg: "Not this carol!" });
+  if (pid && room) room.sendTo(pid, { t: "result", kind: "wrong", text: C.said, strikes: 0, msg: "Not this carol!" });
   C.locked.push(t); C.buzz = null; C.buzzPid = null;
   if (C.locked.length >= 2) return carolReveal(false);
   card(`<div class="banner-card hot"><small>Not quite!</small><b>${esc(tName(1 - t))}, your chance!</b></div>`, "banner", 1400)
@@ -1160,6 +1177,195 @@ screens.carol = {
       </div>
       <button class="back-btn" data-act="home">${icon("home")}</button>
     </div>`;
+  }
+};
+
+/* =========================================================
+   CHRISTMAS SKETCH (Pictionary): one player draws on their phone, it appears live on the TV
+   ========================================================= */
+let K = null;
+const SKETCH_TURNS = 6, SKETCH_SECS = 60, PAPER = "#fffdf6";
+function startSketch() {
+  audio.play("gong"); keepAwake();
+  K = { deck: freshPick(SKETCH_WORDS, "sketch-recent", SKETCH_TURNS + 6, x => x.w), turn: 0, scores: [0, 0], ptr: [0, 0], strokes: [], stage: "intro", skips: 0,
+        team: 0, word: { w: "", a: [] }, drawerPid: null, turnId: "" };     // complete state before the first draw
+  go("sketch");
+  sketchTurn();
+}
+const sketchArtist = () => K.drawerPid ? roster.find(p => p.pid === K.drawerPid) : null;
+async function sketchTurn() {
+  K.team = K.turn % 2;
+  const r = teamRoster(K.team);
+  const artist = r.length ? r[K.ptr[K.team] % r.length] : null;
+  K.drawerPid = artist?.pid || null;
+  K.word = K.deck.shift() || SKETCH_WORDS[Math.floor(Math.random() * SKETCH_WORDS.length)];
+  K.strokes = []; K.stage = "intro"; K.result = null; K.msg = ""; K.turnId = Math.random().toString(36).slice(2, 8); K.skips = 0;
+  freshScene = true; render();
+  audio.music("game");
+  audio.play("timpani"); strobe("sweep", 2000);
+  await card(`<div class="round-card"><div class="rc-kicker">Sketch ${K.turn + 1} of ${SKETCH_TURNS}</div>
+    <div class="rc-coin note"><span>✎</span></div><div class="rc-title">${esc(tName(K.team))} draws!</div>
+    <div class="rc-sub">${artist ? `Artist: ${esc(artist.name)}. Check your phone` : "Artist: come draw on the screen"}</div></div>`, "round", 2400);
+  if (screen !== "sketch") return;
+  K.stage = "ready"; render();
+}
+function sketchStart() {
+  if (K?.stage !== "ready") return;
+  K.stage = "draw"; K.msg = "";
+  audio.play("whoosh"); render();
+  setTimer(SKETCH_SECS, () => sketchSteal(), true);
+}
+function sketchSteal() {
+  if (K.stage !== "draw") return;
+  stopClock();
+  K.stage = "steal";
+  audio.play("steal"); strobe("red", 1800); audio.voice("vo-steal");
+  card(`<div class="steal-card"><div class="alarm"></div><b>STEAL!</b><small>${esc(tName(1 - K.team))}: one guess for 10 points!</small></div>`, "steal", 2000)
+    .then(() => { if (screen === "sketch" && K.stage === "steal") { render(); setTimer(15, () => sketchReveal(null, 0), true); } });
+  render();
+}
+/* does this guess name the secret word? (compared against ALL words, so "deer" ≠ "reindeer" mix-ups) */
+function sketchIsRight(text, alts = []) {
+  const all = SKETCH_WORDS.map(x => [x.w, 1, x.a]);
+  const i = bestMatch(text, alts, all, 0.8);
+  return i >= 0 && SKETCH_WORDS[i].w === K.word.w;
+}
+function sketchGuess(text, who = null, alts = []) {
+  text = String(text || "").trim();
+  if (!text || !["draw", "steal"].includes(K?.stage)) return;
+  const ok = sketchIsRight(text, alts);
+  if (ok) return sketchReveal(K.stage === "steal" ? 1 - K.team : K.team, null, who);
+  if (K.stage === "steal") { audio.wrong(); audio.play("gasp", { vol: 0.6 }); if (who) room?.sendTo(who.pid, { t: "result", kind: "wrong", text, strikes: 0, msg: "Not the word!" }); return sketchReveal(null, 0); }
+  audio.play("nope", { vol: 0.6 });
+  K.msg = `“${text}” isn't it… keep guessing!`;
+  if (who) room?.sendTo(who.pid, { t: "result", kind: "again", msg: `"${text}" isn't it. Keep guessing!` });
+  render();
+}
+function sketchReveal(team, forcePts = null, who = null) {
+  stopClock();
+  const pts = team === null ? 0 : forcePts ?? (K.stage === "steal" ? 10 : T.left >= 30 ? 30 : 20);
+  if (team !== null) {
+    K.scores[team] += pts;
+    audio.play("chime"); setTimeout(() => audio.play("applause", { vol: 0.7 }), 200); setTimeout(() => audio.play("cheer", { vol: 0.5 }), 500);
+    strobe("gold", 1800); confetti(100, { x: 0.5, y: 0.4 });
+    if (who) room?.sendTo(who.pid, { t: "result", kind: "correct", answer: K.word.w, pts });
+  } else audio.play("chime");
+  K.ptr[K.team]++;                                  // next time this team draws, a different artist
+  K.stage = "reveal"; K.result = { team, pts }; K.msg = "";
+  render();
+}
+function sketchNext() {
+  if (K.stage !== "reveal") return;
+  if (K.turn >= SKETCH_TURNS - 1) {
+    const sc = K.scores, w = sc[0] === sc[1] ? null : sc[0] > sc[1] ? 0 : 1;
+    return go("results", { kind: "sketch", winner: w, scores: sc, title: w === null ? "It's a TIE!" : `${tName(w)} wins!`, sub: "Christmas Sketch champions" });
+  }
+  K.turn++; audio.play("whoosh"); sketchTurn();
+}
+function sketchSkip() {
+  if (!["ready", "draw"].includes(K.stage) || K.skips >= 1) return;
+  K.skips++; K.word = K.deck.shift() || K.word; K.strokes = []; redrawSketch();
+  audio.play("whoosh", { vol: 0.6 }); K.msg = "New word for the artist!"; render();
+}
+/* ---- strokes from the artist's phone (or drawn right on the TV) ---- */
+function sketchStroke(m) {
+  if (!["ready", "draw"].includes(K.stage)) return;
+  if (K.stage === "ready") sketchStart();                 // first line starts the clock
+  let s = K.strokes.find(x => x.id === m.id);
+  if (!s) { s = { id: m.id, c: m.c, w: m.w, pts: [] }; K.strokes.push(s); }
+  const from = s.pts.length;
+  s.pts.push(...m.pts);
+  drawSegment(s, Math.max(0, from - 1));
+}
+function sketchUndo() { K.strokes.pop(); redrawSketch(); }
+function sketchClear() { K.strokes = []; redrawSketch(); }
+function sketchCanvas() { return document.getElementById("sketchCanvas"); }
+function drawSegment(s, fromIdx) {
+  const cv = sketchCanvas(); if (!cv) return;
+  const g = cv.getContext("2d"), W = cv.width, H = cv.height;
+  g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = s.c; g.lineWidth = Math.max(2, s.w * W);
+  g.beginPath();
+  const p0 = s.pts[fromIdx]; if (!p0) return;
+  g.moveTo(p0[0] * W, p0[1] * H);
+  if (s.pts.length === 1) g.lineTo(p0[0] * W + 0.1, p0[1] * H + 0.1);
+  for (let i = fromIdx + 1; i < s.pts.length; i++) g.lineTo(s.pts[i][0] * W, s.pts[i][1] * H);
+  g.stroke();
+}
+function redrawSketch() {
+  const cv = sketchCanvas(); if (!cv) return;
+  const g = cv.getContext("2d"); g.fillStyle = PAPER; g.fillRect(0, 0, cv.width, cv.height);
+  K.strokes.forEach(s => drawSegment(s, 0));
+}
+/* host draws on the TV itself when the artist has no phone */
+function wireTvDrawing() {
+  const cv = sketchCanvas(); if (!cv || K.drawerPid || !["ready", "draw"].includes(K.stage)) return;
+  let cur = null;
+  const pt = e => { const r = cv.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+  cv.onpointerdown = e => { try { cv.setPointerCapture(e.pointerId); } catch {} cur = { id: "tv" + Date.now(), c: K.tvColor || "#14214a", w: K.tvSize || 0.008, pts: [pt(e)] }; sketchStroke(cur); };
+  cv.onpointermove = e => { if (!cur) return; sketchStroke({ id: cur.id, c: cur.c, w: cur.w, pts: [pt(e)] }); };
+  cv.onpointerup = cv.onpointercancel = () => { cur = null; };
+}
+function sketchAct(a, v) {
+  if (a === "kStart") return sketchStart();
+  if (a === "kGot") return sketchReveal(K.stage === "steal" ? 1 - K.team : K.team);
+  if (a === "kMiss" && K.stage === "steal") { audio.wrong(); return sketchReveal(null, 0); }
+  if (a === "kSteal" && K.stage === "draw") return sketchSteal();
+  if (a === "kSkip") return sketchSkip();
+  if (a === "kReveal" && ["draw", "steal"].includes(K.stage)) return sketchReveal(null, 0);
+  if (a === "kNext") return sketchNext();
+  if (a === "kUndo") return sketchUndo();
+  if (a === "kClear") return sketchClear();
+  if (a === "kColor") { K.tvColor = v; return render(); }
+  if (a === "listen") return listenTV();
+}
+function sketchControls() {
+  if (!K) return [];
+  const st = K.stage, gotLabel = st === "steal" ? `✓ ${tName(1 - K.team)} stole it` : `✓ ${tName(K.team)} got it!`;
+  if (st === "ready") return [{ a: "kStart", label: "Start the clock ▶", kind: "gold", main: true }, ...(K.skips < 1 ? [{ a: "kSkip", label: "New word", kind: "ghost" }] : [])];
+  if (st === "draw") return [{ a: "kGot", label: gotLabel, kind: "gold" }, ...(K.skips < 1 ? [{ a: "kSkip", label: "New word", kind: "ghost" }] : []), { a: "kSteal", label: "Time's up → steal", kind: "red" }];
+  if (st === "steal") return [{ a: "kGot", label: gotLabel, kind: "gold" }, { a: "kMiss", label: "✕ Missed", kind: "x" }];
+  if (st === "reveal") return [{ a: "kNext", label: K.turn >= SKETCH_TURNS - 1 ? "Final results ▶" : "Next sketch ▶", kind: "gold", main: true }];
+  return [];
+}
+const blanks = w => w.split(" ").map(part => part.replace(/[A-Za-z]/g, "_")).join("   ").split("").join(" ");
+screens.sketch = {
+  enter() { audio.music("game"); },
+  render() {
+    const st = K.stage, rem = remoteOn(), artist = sketchArtist(), tvDraw = !K.drawerPid && ["ready", "draw"].includes(st);
+    const res = K.result;
+    stage.innerHTML = `<div class="scene sketch">
+      <div class="spot-l"></div><div class="spot-r"></div>
+      <header class="scorebar">${[0, 1].map(t => `<div class="pod t${t} ${K.team === t && st !== "steal" || (st === "steal" && t === 1 - K.team) ? "lit" : ""}"><div class="pod-name">${esc(tName(t))}</div><div class="pod-score"><span>${K.scores[t]}</span></div></div>`).join(`<div class="bank-pod"><small>Sketch</small><b>${K.turn + 1}</b><em>of ${SKETCH_TURNS}</em></div>`)}</header>
+      <section class="sketch-wrap">
+        <div class="easel"><canvas id="sketchCanvas" width="960" height="600" class="${tvDraw ? "drawable" : ""}"></canvas>
+          ${st === "reveal" ? `<div class="sketch-word"><small>${res?.team !== null && res?.team !== undefined ? `${esc(tName(res.team))} +${res.pts}` : "The word was"}</small><b>${esc(K.word.w)}</b></div>` : ""}
+          ${st === "ready" && !tvDraw ? `<div class="easel-wait">${esc(artist?.name || "Artist")}, look at your phone and start drawing!</div>` : ""}
+        </div>
+        <aside class="sketch-side">
+          <div class="side-team t${K.team}"><small>Artist</small><b>${esc(artist?.name || tName(K.team))}</b><em>${esc(tName(K.team))}</em></div>
+          <div class="side-clock" id="clockSlot">${timerHTML()}</div>
+          <div class="side-blanks">${st === "reveal" ? esc(K.word.w.toUpperCase()) : esc(blanks(K.word.w))}</div>
+          <p class="side-hint">${st === "draw" ? `${esc(tName(K.team))}: guess on your phones or shout it out!` : st === "steal" ? `${esc(tName(1 - K.team))}: one guess to steal!` : st === "ready" ? "Clock starts with the first line" : ""}</p>
+          ${K.msg ? `<p class="side-msg">${esc(K.msg)}</p>` : ""}
+        </aside>
+      </section>
+      <div class="host-dock wide">
+        ${["draw", "steal"].includes(st) ? `<form class="tv-answer" data-form="tvAnswer" autocomplete="off"><input id="tvAnswer" placeholder="Type a guess…" maxlength="40" spellcheck="false" enterkeyhint="go">
+          <button type="button" class="dbtn mic ${listening ? "on" : ""} ${SR ? "" : "nosr"}" data-act="act" data-v="listen:">${icon("mic")}</button><button class="dbtn gold" type="submit">Guess</button></form>` : ""}
+        ${tvDraw ? `<span class="tv-pens">${["#14214a", "#d42a3c", "#1fa36b", "#2d64cc", "#8a5a14", "#f0b840"].map(c => `<button class="pen ${(K.tvColor || "#14214a") === c ? "on" : ""}" style="background:${c}" data-act="act" data-v="kColor:${c}"></button>`).join("")}
+          <button class="dbtn ghost" data-act="act" data-v="kUndo:">Undo</button><button class="dbtn ghost peek-word" data-hold="word">Hold to see word</button></span>` : ""}
+        ${rem ? `<div class="remote-badge">${icon("key")} Host remote</div>` : `<span class="dock-label">HOST</span>${sketchControls().map(x => `<button class="dbtn ${x.kind}" data-act="act" data-v="${x.a}:${x.v ?? ""}">${x.label}</button>`).join("")}`}
+      </div>
+      <button class="back-btn" data-act="home">${icon("home")}</button>
+    </div>`;
+    redrawSketch();
+    wireTvDrawing();
+    const peek = stage.querySelector("[data-hold=word]");
+    if (peek) {
+      const show = () => { peek.textContent = K.word.w.toUpperCase(); peek.classList.add("showing"); };
+      const hide = () => { peek.textContent = "Hold to see word"; peek.classList.remove("showing"); };
+      peek.onpointerdown = show; peek.onpointerup = peek.onpointerleave = peek.onpointercancel = hide;
+    }
   }
 };
 
@@ -1333,9 +1539,22 @@ function playerView(pid) {
     else if (C.stage === "answer") status = C.buzz === me?.team ? (C.buzzPid === pid || !C.buzzPid ? "You buzzed! What's the carol?" : `${roster.find(p => p.pid === C.buzzPid)?.name || "Your teammate"} is answering`) : `${tName(C.buzz ?? 0)} buzzed in!`;
     else if (C.stage === "reveal") status = C.result?.won ? `${tName(C.result.t)} got it: ${carolNow().title}!` : `It was ${carolNow().title}`;
   }
+  if (screen === "sketch" && K) {
+    const artist = pid === K.drawerPid, mine = me?.team === K.team;
+    if (artist) { status = K.stage === "ready" ? "You're the artist! Draw this:" : K.stage === "draw" ? "Draw it! No letters or numbers" : K.stage === "steal" ? "Time's up! The other team is stealing" : K.stage === "reveal" ? (K.result?.team === K.team ? "They got it! Great drawing!" : `It was: ${K.word.w}`) : "Get ready…"; tone = "hot"; }
+    else if (K.stage === "draw") status = mine ? "What is it? Guess!" : `${tName(K.team)} is guessing. Get ready to steal!`;
+    else if (K.stage === "steal") status = !mine ? "STEAL! One guess, make it count!" : "The other team is trying to steal…";
+    else if (K.stage === "reveal") status = `It was: ${K.word.w}`;
+    else status = `${sketchArtist()?.name || tName(K.team)} is about to draw. Watch the TV!`;
+  }
   if (screen === "results") status = R?.title || "Game over!";
   let answer = screen === "survey" && G && me ? mayAnswer(me) : false;   // shows the type / mic box
   if (screen === "carol" && C?.stage === "answer" && me && C.buzz === me.team && (!C.buzzPid || C.buzzPid === pid)) answer = true;
+  let sketch = null;
+  if (screen === "sketch" && K && me) {
+    if (pid === K.drawerPid) sketch = { artist: true, word: K.word.w, stage: K.stage, turnId: K.turnId, canSkip: K.skips < 1 && ["ready", "draw"].includes(K.stage) };
+    else if ((K.stage === "draw" && me.team === K.team) || (K.stage === "steal" && me.team === 1 - K.team)) answer = true;
+  }
   const pp = screen === "survey" && G?.stage === "choose" && me?.team === G.fo.winner;
   let q = screen === "survey" && G ? G.round.q : "", mode = "survey", choices = null, answerNow = answer;
   if (screen === "fast" && F) {
@@ -1356,7 +1575,8 @@ function playerView(pid) {
     answerNow = false;
     if (!mine && A.picked === null) choices = choices.map(ch => ({ ...ch, state: "locked" }));
   }
-  return { ...base, status, buzz, tone, answer: answerNow, mode, choices, pp, pending: !!G?.pending && screen === "survey", q };
+  if (sketch) mode = "sketch";
+  return { ...base, status, buzz, tone, answer: answerNow, mode, choices, pp, sketch, pending: !!G?.pending && screen === "survey", q };
 }
 function hostView() {
   const v = { screen, teams: [tName(0), tName(1)] };
@@ -1371,6 +1591,7 @@ function hostView() {
   if (screen === "results") v.controls = [{ a: "again", label: "Play again", kind: "gold" }, ...(R?.kind === "survey" ? [{ a: "fastFromResults", label: "Fast Money", kind: "red" }] : []), { a: "menu", label: "Menu", kind: "ghost" }];
   if (screen === "lobby") v.controls = [{ a: "startGameRemote", label: "Start the show ▶", kind: "gold" }];
   if (screen === "carol" && C) Object.assign(v, { prompt: `Now playing (only you can see): ${carolNow().title}`, controls: carolControls() });
+  if (screen === "sketch" && K) Object.assign(v, { prompt: `Secret word (only you + the artist): ${K.word.w}`, controls: sketchControls() });
   if (screen === "fast" && F && (F.phase === "rev1" || F.phase === "rev2")) {
     const p = F.phase === "rev1" ? 0 : 1;
     v.fmFixRows = F.qs.slice(0, F.shown[p]).map((q, qi) => ({ p, q: qi, question: q.q, said: F.fixed?.[`${p}.${qi}`] ?? F.ans[p][qi] ?? "", pick: F.pick[p][qi], options: q.a.map(([t, pts], i) => ({ i, label: `${t} · ${pts}` })) }));
@@ -1388,4 +1609,4 @@ history.replaceState({ screen: "cover" }, "");
 screen = "cover"; document.body.dataset.screen = "cover";
 document.getElementById("cover").hidden = false;
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js");
-window.__CSS = { S, get G() { return G; }, get F() { return F; }, get A() { return A; }, get room() { return room; }, go, act };
+window.__CSS = { S, get G() { return G; }, get F() { return F; }, get A() { return A; }, get room() { return room; }, get K() { return K; }, get C() { return C; }, go, act };
