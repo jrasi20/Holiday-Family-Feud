@@ -12,7 +12,7 @@ const lastName = () => { try { return JSON.parse(localStorage.getItem("cssp-last
 let code = (qs.get("r") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
 const hostKey = qs.get("h");
 const role = hostKey ? "host" : "player";
-let client = null, state = null, link = "idle", step = "name";
+let client = null, state = null, link = "idle", step = "name", fixOpen = false, fixRow = null;
 
 /* ---------- tiny phone audio (synth, no files) ---------- */
 let ctx = null;
@@ -121,7 +121,7 @@ function renderAnswer(s, teams, typed, hadFocus) {
   app.innerHTML = `
     <header class="p-top"><div class="me"><small>${esc(teams[s.team] || "")}</small><b>${esc(s.name || "")}</b></div>
       <div class="mini-score"><span class="s0">${s.scores?.[0] ?? 0}</span><span class="s1">${s.scores?.[1] ?? 0}</span></div></header>
-    <p class="status">${esc(sent || s.pending ? (s.mode === "fast" ? "Locked in!" : "Survey says…") : s.status)}</p>
+    <p class="status">${esc(sent || s.pending ? (s.mode === "fast" ? "Locked in!" : s.screen === "carol" ? "Checking…" : "Survey says…") : s.status)}</p>
     <div class="ans-q">${esc(s.q || "")}</div>
     <form id="af" class="ans-form ${sent || s.pending ? "waiting" : ""}" autocomplete="off">
       <input id="ans" maxlength="60" placeholder="Type your answer" value="${esc(typed)}" ${sent || s.pending ? "disabled" : ""} enterkeyhint="send" autocapitalize="sentences" spellcheck="false">
@@ -216,7 +216,7 @@ function renderHost() {
       <div class="h-answers">${s.answers.map((a, i) => `<button class="h-ans ${a.r ? "done" : ""}" data-a="reveal" data-v="${i}" ${a.r || !s.canReveal || s.pending ? "disabled" : ""} title="${s.stage === "roundEnd" ? "Reveal on TV (no points)" : "Award this answer"}"><em>${i + 1}</em><span>${esc(a.t)}</span><b>${a.p}</b></button>`).join("")}</div>
       ${s.stage === "roundEnd" ? `<p class="muted small">Tap answers to reveal them on the TV</p>` : ""}
       ${s.canReveal && s.stage !== "roundEnd" ? `<button class="h-strike" data-a="strike" ${s.pending ? "disabled" : ""}>✕ NOT ON THE BOARD</button><p class="muted small">${"✕".repeat(s.strikes)}${"·".repeat(Math.max(0, 3 - s.strikes))} strikes</p>` : ""}`;
-  } else if (s.screen === "fast" || s.screen === "arcade") {
+  } else if (s.screen === "fast" || s.screen === "arcade" || s.screen === "carol") {
     body = `<p class="h-prompt">${esc(s.prompt || "")}</p>${s.total !== undefined ? `<div class="h-score"><span class="bank">Total <b>${s.total}</b> / 200</span></div>` : ""}
       ${s.fmAnswers ? `<div class="h-q">Survey answers (only you can see these):<br>${s.fmAnswers.map(esc).join(" · ")}</div>` : ""}`;
   } else body = `<p class="h-prompt">${s.screen === "lobby" ? "Players are joining. Start when everyone's in!" : "Use the TV to choose a game."}</p>`;
@@ -224,7 +224,23 @@ function renderHost() {
     ${body}
     <div class="h-ctl">${ctl.map(c => `<button class="h-btn ${c.kind || ""}" data-a="${c.a}" data-v="${c.v ?? ""}">${esc(c.label)}</button>`).join("")}</div>
     ${linkLine()}`;
-  app.querySelectorAll("[data-a]").forEach(b => b.onclick = () => { if (b.disabled) return; vib(25); client.send({ t: "act", a: b.dataset.a, v: b.dataset.v }); b.classList.add("sent"); });
+  if (fixOpen && s.fmFixRows?.length) {   // deliberate correction panel (never mixed in with the reveal button)
+    const row = s.fmFixRows.find(r => r.q === fixRow);
+    app.innerHTML = `<header class="h-top"><b>Fix an answer's match</b><small>Only if the game matched an answer wrongly</small></header>
+      ${row ? `<p class="h-prompt">Q${row.q + 1}: ${esc(row.question)}</p><div class="h-q">Player said: <b>“${esc(row.said || "(pass)")}”</b><br>Pick what it really matches:</div>
+        <div class="h-ctl">${row.options.map(o => `<button class="h-btn ans ${o.i === row.pick ? "ok" : ""}" data-fix="${row.p}.${row.q}.${o.i}">${esc(o.label)}</button>`).join("")}<button class="h-btn x" data-fix="${row.p}.${row.q}.-1">Not on the board · 0</button></div>`
+        : `<p class="h-prompt">Which answer?</p><div class="h-ctl">${s.fmFixRows.map(r => `<button class="h-btn" data-row="${r.q}">Q${r.q + 1}: “${esc(r.said || "(pass)")}”</button>`).join("")}</div>`}
+      <div class="h-ctl"><button class="h-btn ghost" data-close="1">Cancel</button></div>`;
+    app.querySelectorAll("[data-row]").forEach(b => b.onclick = () => { fixRow = +b.dataset.row; render(); });
+    app.querySelectorAll("[data-fix]").forEach(b => b.onclick = () => { vib(30); client.send({ t: "act", a: "fmFix", v: b.dataset.fix }); fixOpen = false; fixRow = null; render(); });
+    app.querySelector("[data-close]").onclick = () => { fixOpen = false; fixRow = null; render(); };
+    return;
+  }
+  app.querySelectorAll("[data-a]").forEach(b => b.onclick = () => {
+    if (b.disabled) return; vib(25);
+    if (b.dataset.a === "fmFixMenu") { fixOpen = true; fixRow = null; return render(); }
+    client.send({ t: "act", a: b.dataset.a, v: b.dataset.v }); b.classList.add("sent");
+  });
 }
 const linkLine = () => `<p class="link-line ${link}">${{ connected: "● Connected", connecting: "Connecting…", lost: "Reconnecting…", noroom: "Room not found", unavailable: "Can't connect. Ask the host to tap for you" }[link] || ""}</p>`;
 

@@ -207,6 +207,25 @@ export const CHALLENGE_BANK = [
   {type:"Which Came First",q:"Which happened FIRST?",choices:["Jesus was named","Jesus was presented at the temple"],answer:0,note:"Luke 2:21–22"}
 ];
 
+// Name That Carol: 30-second clips in assets/carols/<id>.mp3 (traditional, public-domain carols)
+export const CAROLS = [
+  {id:"angels-we-have-heard", title:"Angels We Have Heard on High", aliases:["angels we have heard","gloria","in excelsis deo","angels we have heard on high"]},
+  {id:"auld-lang-syne", title:"Auld Lang Syne", aliases:["old lang syne","old lang sign","auld lang sign","should old acquaintance","old acquaintance"]},
+  {id:"away-in-a-manger", title:"Away in a Manger", aliases:["away in the manger","no crib for a bed"]},
+  {id:"carol-of-the-bells", title:"Carol of the Bells", aliases:["ding dong","hark how the bells","carol of bells"]},
+  {id:"deck-the-halls", title:"Deck the Halls", aliases:["deck the hall","fa la la","deck the halls with boughs of holly"]},
+  {id:"god-rest-ye-merry", title:"God Rest Ye Merry Gentlemen", aliases:["god rest ye merry","god rest you merry","god rest ye merry gentlemen","tidings of comfort and joy"]},
+  {id:"hark-the-herald", title:"Hark! The Herald Angels Sing", aliases:["hark the herald","herald angels","hark the herald angels sing"]},
+  {id:"jingle-bells", title:"Jingle Bells", aliases:["jingle bell","dashing through the snow","jingle all the way"]},
+  {id:"o-come-emmanuel", title:"O Come, O Come, Emmanuel", aliases:["o come emmanuel","o come o come emmanuel","oh come oh come emmanuel","come emmanuel","rejoice rejoice"]},
+  {id:"o-holy-night", title:"O Holy Night", aliases:["oh holy night","o holy night"]},
+  {id:"o-little-town-of-bethlehem", title:"O Little Town of Bethlehem", aliases:["little town of bethlehem","oh little town of bethlehem"]},
+  {id:"silent-night", title:"Silent Night", aliases:["silent night holy night"]},
+  {id:"the-first-noel", title:"The First Noel", aliases:["first noel","noel noel","the first nowell"]},
+  {id:"we-three-kings", title:"We Three Kings", aliases:["we 3 kings","we three kings of orient are"]},
+  {id:"what-child-is-this", title:"What Child Is This?", aliases:["what child is this","greensleeves"]}
+];
+
 export const shuffle = items => {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i--) {

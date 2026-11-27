@@ -57,7 +57,7 @@ function score(guess, variant) {
 const sound = w => {
   w = w.toLowerCase().replace(/[^a-z]/g, "");
   if (w.length < 4) return w;
-  const first = w[0];
+  const first = /[aeiou]/.test(w[0]) ? "A" : w[0];
   return first + w.slice(1)
     .replace(/ph/g, "f").replace(/ck|q|c(?=[aou])|ch/g, "k").replace(/c/g, "s").replace(/z/g, "s").replace(/x/g, "ks")
     .replace(/[aeiouyhw]/g, "").replace(/l(?=k)/g, "").replace(/(.)\1+/g, "$1");
@@ -70,11 +70,11 @@ function soundsLike(guess, variant) {
 }
 
 /** index of the best-matching answer, or -1 if nothing on the board matches */
-export function matchAnswer(guess, answers) {
+export function matchAnswer(guess, answers, min = 0.6) {
   let best = -1, bestScore = 0;
   answers.forEach((ans, i) => {
     const s = Math.max(...variants(ans).map(v => Math.max(score(guess, v), soundsLike(guess, v))));
     if (s > bestScore) { bestScore = s; best = i; }
   });
-  return bestScore >= 0.6 ? best : -1;
+  return bestScore >= min ? best : -1;
 }

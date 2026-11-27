@@ -2,7 +2,7 @@
 // SFX = mp3 buffers. Music = docs/assets/music/<track>.mp3 if present,
 // otherwise a built-in synthesized public-domain carol, so the game is never silent.
 
-const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown","incorrect","chime","ooh","buzzer","clock","press","hover"];
+const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown","incorrect","chime","ooh","buzzer","clock","press","hover","cheer","applause","gasp"];
 const VO = ["vo-survey-says","vo-top-answer","vo-steal","vo-fast-money","vo-winner","vo-round","vo-welcome","vo-congrats","vo-great","vo-better-luck","vo-try-again",
   "vo-lobby","vo-faceoff","vo-buzzed","vo-play-or-pass","vo-strike1","vo-strike2","vo-strike3","vo-board-cleared","vo-steal-success","vo-final-round","vo-next-round","vo-times-up","vo-fm-reveal","vo-duplicate",
   "vo-turn-bethlehem","vo-turn-nazareth","vo-next-question","vo-fm-player1","vo-fm-player2","vo-wrong","vo-need-200","vo-top-was","vo-well-tried"];   // optional: play when the file exists
@@ -92,6 +92,28 @@ export const audio = {
     const src = ctx.createBufferSource(), g = ctx.createGain();
     src.buffer = buffers.clock; src.loop = true; g.gain.value = 0.55;
     src.connect(g).connect(sfxBus); src.start(); clockNode = { src, g };
+  },
+  /* Name That Carol: a clip that can pause on a buzz and resume */
+  clip(url) {
+    const c = { buf: null, src: null, g: null, offset: 0, startedAt: 0, playing: false, onend: null, ready: null };
+    c.ready = (ctx ? load(url) : Promise.resolve(null)).then(b => { c.buf = b; return b; });
+    c.play = () => {
+      if (!ctx || !c.buf || c.playing) return;
+      const src = ctx.createBufferSource(), g = ctx.createGain();
+      src.buffer = c.buf; g.gain.setValueAtTime(0.0001, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.9, ctx.currentTime + 0.25);
+      src.connect(g).connect(master); src.start(0, Math.min(c.offset, c.buf.duration - 0.05));
+      c.src = src; c.g = g; c.startedAt = ctx.currentTime - c.offset; c.playing = true;
+      src.onended = () => { if (c.src === src && c.playing) { c.playing = false; c.offset = c.buf.duration; c.onend?.(); } };
+    };
+    c.pause = () => {
+      if (!c.playing) return;
+      c.offset = ctx.currentTime - c.startedAt; c.playing = false;
+      const { src, g } = c; c.src = null;
+      try { g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.05); src.stop(ctx.currentTime + 0.2); } catch {}
+    };
+    c.stop = () => { c.pause(); c.offset = 0; };
+    c.elapsed = () => c.playing ? ctx.currentTime - c.startedAt : c.offset;
+    return c;
   },
   tick(urgent) {
     if (!ctx || !sfxOn) return;

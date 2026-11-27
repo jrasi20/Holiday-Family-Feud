@@ -1,7 +1,7 @@
 // Christmas Bible Survey Showdown: TV / HOST SCREEN
 // The TV is a 1600x900 broadcast stage scaled to fit. Phones join by QR:
 // players get team buzzers, the host gets a private answer remote.
-import { SURVEY_BANK, FAST_MONEY_BANK, CHALLENGE_BANK, shuffle } from "./data.js";
+import { SURVEY_BANK, FAST_MONEY_BANK, CHALLENGE_BANK, CAROLS, shuffle } from "./data.js";
 import { audio } from "./audio.js";
 import { startSnow, confetti, confettiRain, countUp } from "./fx.js";
 import { Room, joinUrl } from "./net.js";
@@ -50,6 +50,7 @@ const I = {
   key: '<svg viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><path class="ln" d="M12 12h9M18 12v3.5M15.5 12v2.5"/></svg>',
   crown: '<svg viewBox="0 0 24 24"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path class="ln" d="M6 6l12 12M18 6L6 18"/></svg>',
+  music: '<svg viewBox="0 0 24 24"><path d="M9 17.5V6l11-2v11.5"/><circle cx="6.5" cy="17.5" r="2.8"/><circle cx="17.5" cy="15.5" r="2.8"/></svg>',
   mic: '<svg viewBox="0 0 24 24"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5"/><path class="ln" d="M5 11a7 7 0 0 0 14 0M12 18v3.5M8.5 21.5h7"/></svg>'
 };
 const icon = (n, c = "") => `<i class="ico ${c}">${I[n]}</i>`;
@@ -59,6 +60,7 @@ const screens = {};
 let screen = null, freshScene = false;
 function go(name, arg, { push = true } = {}) {
   stopClock();
+  if (screen === "carol" && name !== "carol") C?.clip?.stop();
   freshScene = true;
   screen = name;
   document.body.dataset.screen = name;
@@ -140,6 +142,17 @@ function card(html, kind, ms = 1800) {
     cardTimer = setTimeout(() => { closeCard(); res(); }, ms);
   });
 }
+/* game-show light show: sweeping colored beams + quick white flashes (kept gentle: no rapid flicker) */
+const CALM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function strobe(kind = "sweep", ms = 2200) {
+  if (CALM && kind !== "sweep") return;
+  const el = document.createElement("div");
+  el.className = `strobe ${kind}`;
+  el.innerHTML = `<i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i><span class="flashes"></span>`;
+  el.style.setProperty("--ms", ms + "ms");
+  stageBox.appendChild(el);
+  setTimeout(() => el.remove(), ms);
+}
 function closeCard(instant) {
   clearTimeout(cardTimer);
   if (!cardEl) return;
@@ -195,6 +208,11 @@ const remoteOn = () => !!room?.hostRemote;
 
 function onPhone(m, pid) {
   if (m.t === "hello") { syncPhones(); if (m.role === "host") { audio.play("star"); if (screen !== "lobby") render(); } return; }
+  if (screen === "carol" && C) {
+    const me = roster.find(p => p.pid === pid);
+    if (m.t === "buzz" && me && me.team !== null) return carolBuzz(me.team, pid);
+    if (m.t === "answer" && me && C.stage === "answer" && C.buzz === me.team && (!C.buzzPid || C.buzzPid === pid)) return carolGuess(String(m.text || "").slice(0, 60), (m.alts || []).slice(0, 4).map(String));
+  }
   if (m.t === "buzz" && screen === "survey" && G?.stage === "faceoff") {
     const me = roster.find(p => p.pid === pid);
     if (!me || me.team === null) return;
@@ -263,6 +281,7 @@ screens.home = {
         <div class="mini-row">
           <button class="mini-btn" data-act="lobby" data-v="fast">${icon("bolt")}<b>Fast Money</b></button>
           <button class="mini-btn" data-act="lobby" data-v="arcade">${icon("book")}<b>Bible Challenge</b></button>
+          <button class="mini-btn" data-act="lobby" data-v="carol">${icon("music")}<b>Name That Carol</b></button>
           <button class="mini-btn" data-act="how">${icon("info")}<b>How to Play</b></button>
         </div>
       </div>
@@ -313,7 +332,7 @@ screens.lobby = {
     const ready = linkStatus === "ready" && room?.code;
     const url = ready ? joinUrl(room.code) : "";
     const hostUrl = ready ? joinUrl(room.code, room.key) : "";
-    const title = { survey: "Survey Showdown", fast: "Fast Money", arcade: "Bible Challenge" }[nextGame];
+    const title = { survey: "Survey Showdown", fast: "Fast Money", arcade: "Bible Challenge", carol: "Name That Carol" }[nextGame];
     stage.innerHTML = `
     <div class="scene lobby">
       ${rays()}
@@ -352,6 +371,7 @@ function qrSvg(text) {
 actions.startGame = () => {
   S.teams.forEach((t, i) => { t.name = (t.name || "").trim() || (i ? "Nazareth" : "Bethlehem"); }); save();
   if (nextGame === "fast") return startFast();
+  if (nextGame === "carol") return startCarol();
   if (nextGame === "arcade") return startArcade();
   startSurvey();
 };
@@ -397,7 +417,7 @@ async function beginRound(first = false) {
   G.shown.bank = 0;
   if (first) go("survey"); else { freshScene = true; render(); }   // state is complete before the first draw
   audio.music("game");                      // piano loop for every Showdown round
-  audio.play("timpani");
+  audio.play("timpani"); strobe("sweep", 2300);
   const last = G.ri === G.deck.length - 1;
   await card(`<div class="round-card">
       <div class="rc-kicker">${last ? "Final Round" : `Round ${G.ri + 1} of ${G.deck.length}`}</div>
@@ -414,7 +434,7 @@ async function beginRound(first = false) {
 
 function faceoffCard() {
   const p = [faceoffPlayer(0), faceoffPlayer(1)];
-  audio.play("transition", { vol: 0.7 });
+  audio.play("transition", { vol: 0.7 }); strobe("flash", 900);
   setTimeout(() => audio.voice("vo-faceoff"), 500);
   card(`<div class="vs-card">
     <div class="vs-side l t0"><small>${esc(tName(0))}</small><b>${esc(p[0]?.name || "Team " + tName(0))}</b></div>
@@ -454,6 +474,7 @@ function act(a, v) {
   }
   if (screen === "fast" && F) { if (a === "listen") return listenTV(); return fastAct(a, v); }
   if (screen === "arcade" && A) return arcadeAct(a, v);
+  if (screen === "carol" && C) return carolAct(a, v);
   if (screen === "results") { if (a === "again") return actions.again(); if (a === "fastFromResults") return actions.fastFromResults(); if (a === "menu") return go("home"); }
 }
 actions.act = (v) => { const [a, val] = v.split(":"); act(a, val); };
@@ -476,8 +497,8 @@ function mayAnswer(me) {
 }
 /* a typed or spoken answer: from a player's phone, or from the TV's own answer box / mic */
 /* try the typed/heard text first, then the speech engine's other guesses ("stalking" → "stocking") */
-function bestMatch(text, alts, answers) {
-  for (const t of [text, ...(alts || [])]) { const i = matchAnswer(t, answers); if (i >= 0) return i; }
+function bestMatch(text, alts, answers, min) {
+  for (const t of [text, ...(alts || [])]) { const i = matchAnswer(t, answers, min); if (i >= 0) return i; }
   return -1;
 }
 function submitAnswer(text, who = null, alts = []) {
@@ -519,7 +540,7 @@ function reveal(i, src = "player") {
   if (src === "after") { audio.play("chime", { vol: 0.75, rate: 1.12 }); return; }
   G.bank += G.round.a[i][1] * G.mult;
   audio.play("chime", { rate: src === "host" ? 0.94 : 1 });            // every tile: the answer chime
-  if (i === 0) { setTimeout(() => audio.play("top"), 260); setTimeout(() => audio.voice("vo-top-answer"), 700); setTimeout(() => confetti(110, { x: 0.5, y: 0.42 }), 250); }
+  if (i === 0) { setTimeout(() => audio.play("top"), 260); setTimeout(() => audio.play("cheer", { vol: 0.45 }), 400); setTimeout(() => audio.voice("vo-top-answer"), 700); setTimeout(() => confetti(110, { x: 0.5, y: 0.42 }), 250); strobe("gold", 1700); }
   else if (G.stage === "play" && Math.random() < 0.5) setTimeout(() => audio.voice("vo-great"), 650);
 }
 
@@ -559,9 +580,10 @@ function strike(why) {
     if (G.fo.step === 0) { G.fo.step = 1; G.msg = `${why === "time" ? "Time's up! " : ""}${tName(G.fo.order[1])}, it's your chance!`; render(); return setTimer(S.settings.timer ? 15 : 0, () => strike("time")); }
     return settleFaceoff();
   }
-  if (st === "steal") { xCard(1); setTimeout(() => audio.voice("vo-better-luck"), 900); return setTimeout(() => endRound(G.control), 1300); }
+  if (st === "steal") { xCard(1); setTimeout(() => audio.play("gasp", { vol: 0.8 }), 350); setTimeout(() => audio.voice("vo-better-luck"), 1100); return setTimeout(() => endRound(G.control), 1300); }
   G.strikes++;
   xCard(G.strikes);
+  if (G.strikes >= STRIKES) setTimeout(() => audio.play("gasp", { vol: 0.8 }), 400);
   setTimeout(() => audio.voice(`vo-strike${G.strikes}`), 1100);
   G.ptr[G.control]++;
   if (G.strikes >= STRIKES) { render(); return setTimeout(() => { if (screen === "survey") toSteal(); }, 1300); }
@@ -588,10 +610,11 @@ function tvSubmit(v, alts = []) {
   if (!String(v).trim()) return;
   if (screen === "survey" && G) { const a = answerer(); submitAnswer(v, a?.pid ? roster.find(p => p.pid === a.pid) : null, alts); }
   else if (screen === "fast" && F) fmSubmit(v, null, alts);
+  else if (screen === "carol" && C) carolGuess(v, alts);
 }
 function listenTV() {
   if (!SR) { card(`<div class="banner-card"><b>Voice answers</b><small>Use Chrome, Edge or Safari to answer by voice. Typing works everywhere!</small></div>`, "banner", 2600); return; }
-  const ok = (screen === "survey" && G && LIVE.includes(G.stage)) || (screen === "fast" && F && fmLive());
+  const ok = (screen === "survey" && G && LIVE.includes(G.stage)) || (screen === "fast" && F && fmLive()) || (screen === "carol" && C?.stage === "answer");
   if (!ok) return;
   if (listening) { try { recog?.stop(); } catch {} return; }
   recog = new SR(); recog.lang = "en-US"; recog.interimResults = true; recog.maxAlternatives = 3;
@@ -653,7 +676,7 @@ function turnVoice(t) {
 }
 function toSteal() {
   G.stage = "steal"; G.msg = "";
-  audio.play("steal");
+  audio.play("steal"); strobe("red", 2400);
   if (!audio.voice("vo-steal")) audio.play("transition", { vol: 0.6 });
   render();
   card(`<div class="steal-card"><div class="alarm"></div><b>STEAL!</b><small>${esc(tName(1 - G.control))}: huddle up. One answer takes all <em>${G.bank}</em> points!</small></div>`, "steal", 2400)
@@ -669,6 +692,8 @@ function endRound(team, sweep = false) {
   render();
   audio.play(G.stolen ? "steal" : "win", { vol: 0.8 });
   audio.music("win");                                     // triumphant bed until the next round starts
+  audio.play("applause", { vol: 0.7 }); if (sweep || G.stolen) setTimeout(() => audio.play("cheer", { vol: 0.55 }), 300);
+  strobe(sweep || G.stolen ? "party" : "sweep", 2600);
   confettiRain(sweep || G.stolen ? 2.2 : 1.2);
   if (G.stolen || sweep) setTimeout(() => audio.voice(G.stolen ? "vo-steal-success" : "vo-board-cleared"), 700);
   card(`<div class="award-card t${team}"><small>${G.stolen ? "Stolen!" : sweep ? "Board cleared!" : "Points to"}</small><b>${esc(tName(team))}</b><div class="award-pts">+${pts}</div>
@@ -843,7 +868,9 @@ screens.fast = {
       ${[0, 1].map(p => {
         const shown = qi < F.shown[p], ix = F.pick[p][qi], said = F.ans[p][qi];
         if (!shown) return `<div class="fm-cell blank"></div>`;
-        const was = p === 1 && F.topWas?.includes(qi) ? `<small class="was-line">Top answer: ${esc(q.a[0][0])} · ${q.a[0][1]}</small>` : "";
+        const fixedFrom = F.fixed?.[`${p}.${qi}`];
+        const was = fixedFrom !== undefined ? `<small class="was-line host">Changed by host (said “${esc(fixedFrom)}”)</small>`
+          : p === 1 && F.topWas?.includes(qi) ? `<small class="was-line">Top answer: ${esc(q.a[0][0])} · ${q.a[0][1]}</small>` : "";
         return `<div class="fm-cell ${ix >= 0 ? "hit" : "miss"} ${ix === 0 ? "top" : ""} ${was ? "has-was" : ""} flip"><span>${esc(said || "(pass)")}${was}</span><b>${ix >= 0 ? q.a[ix][1] : 0}</b></div>`;
       }).join("")}${F.tops ? (qi < F.tops ? `<div class="fm-cell topans flip"><span>${esc(q.a[0][0])}</span><b>${q.a[0][1]}</b></div>` : `<div class="fm-cell blank"></div>`) : ""}</div>`).join("");
     let center = "";
@@ -878,12 +905,8 @@ function fmControls() {
   if (fmLive()) return [{ a: "fmPass", label: "Pass (come back later)", kind: "ghost" }];
   if (ph === "rev1" || ph === "rev2") {
     const p = ph === "rev1" ? 0 : 1, out = [];
-    // host remote only: correct the last revealed match (private: shows survey answers)
-    if (F.shown[p] > 0) {
-      const q = F.shown[p] - 1;
-      F.qs[q].a.forEach(([a, pts], i) => out.push({ a: "fmFix", v: `${p}.${q}.${i}`, label: `Q${q + 1} = ${a} · ${pts}`, kind: "ans", remoteOnly: true }));
-      out.push({ a: "fmFix", v: `${p}.${q}.-1`, label: `Q${q + 1} = no match`, kind: "x", remoteOnly: true });
-    }
+    // host remote only: a separate, clearly-labelled step (it opens a panel on the host's phone)
+    if (F.shown[p] > 0) out.push({ a: "fmFixMenu", label: "✎ Fix an answer's match", kind: "ghost", remoteOnly: true });
     if (F.shown[p] < 5) return [{ a: "fmReveal", label: `Reveal answer ${F.shown[p] + 1} ▶`, kind: "gold", main: true }, ...out];
     if (ph === "rev1") return [{ a: "fmStart", v: 1, label: `Bring in ${fmPlayer(1)}: 25 seconds`, kind: "red", main: true }, ...out];
     const tops = (F.tops || 0) < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : [];
@@ -927,8 +950,13 @@ function fastAct(a, v) {
     F.ans[fmPl()][F.qi] = ""; F.pick[fmPl()][F.qi] = -1; return fmAdvance();
   }
   if (a === "fmReveal") {
-    const p = F.phase === "rev1" ? 0 : 1; if (F.shown[p] >= 5) return;
-    const ix = F.pick[p][F.shown[p]];
+    const p = F.phase === "rev1" ? 0 : 1; if (F.shown[p] >= 5 || F._revealing) return;
+    const qn = F.shown[p], ix = F.pick[p][qn];
+    F._revealing = true;
+    audio.play("whoosh", { vol: 0.5 });
+    card(`<div class="fm-qflash"><small>Question ${qn + 1}</small><b>${esc(F.qs[qn].q)}</b><em>${esc(fmPlayer(p))} said…</em></div>`, "fmq", 1700).then(() => {
+    F._revealing = false;
+    if (screen !== "fast") return;
     F.shown[p]++;
     render();
     setTimeout(() => {
@@ -945,8 +973,9 @@ function fastAct(a, v) {
         }, ix >= 0 ? 1100 : 1500);
       }
       // crossed 200? celebrate right now, don't make them wait
-      if (!F.won && fmTotal() >= 200) { F.won = true; setTimeout(() => { if (screen === "fast") fmFinish(); }, 1800); }
+      if (!F.won && fmTotal() >= 200) { F.won = true; audio.play("cheer", { vol: 0.6 }); strobe("party", 1800); setTimeout(() => { if (screen === "fast") fmFinish(); }, 1800); }
     }, 180);
+    });
     return;
   }
   if (a === "fmTops") {
@@ -962,7 +991,13 @@ function fastAct(a, v) {
   }
   if (a === "fmFix") {
     const [p, q, i] = String(v).split(".").map(Number);
-    if (F.pick[p] && q < F.shown[p]) { F.pick[p][q] = i; if (i >= 0 && !F.ans[p][q]) F.ans[p][q] = F.qs[q].a[i][0]; audio.play(i >= 0 ? "chime" : "nope"); render(); }
+    if (!F.pick[p] || q >= F.shown[p]) return;
+    F.pick[p][q] = i;
+    (F.fixed ||= {})[`${p}.${q}`] = F.ans[p][q] || "(pass)";            // remember what the player actually said
+    F.ans[p][q] = i >= 0 ? F.qs[q].a[i][0] : (F.ans[p][q] || "");      // board shows the answer the host chose
+    audio.play(i >= 0 ? "chime" : "nope");
+    card(`<div class="banner-card"><small>Host changed question ${q + 1}</small><b>${i >= 0 ? `${esc(F.qs[q].a[i][0])} · ${F.qs[q].a[i][1]}` : "No match · 0"}</b></div>`, "banner", 1600);
+    render();
     return;
   }
   if (a === "fmDone") return fmFinish();
@@ -1005,6 +1040,128 @@ function fmEnd(early = false) {
   }
   render();
 }
+
+/* =========================================================
+   NAME THAT CAROL: a clip plays, first team to buzz names the carol
+   ========================================================= */
+let C = null;
+const CAROL_ROUNDS = 8, CAROL_FAST = 10;     // buzz within 10s of music = 20 points, after = 10
+function startCarol() {
+  audio.play("gong"); keepAwake();
+  C = { deck: freshPick(CAROLS, "carol-recent", CAROL_ROUNDS, x => x.id), i: 0, scores: [0, 0], stage: "intro", locked: [], buzz: null, buzzPid: null, clip: null, result: null };
+  go("carol");
+  carolRound();
+}
+const carolNow = () => C.deck[C.i];
+async function carolRound() {
+  C.stage = "intro"; C.locked = []; C.buzz = null; C.buzzPid = null; C.result = null; C.said = null;
+  C.clip?.stop();
+  C.clip = audio.clip(`assets/carols/${carolNow().id}.mp3`);
+  C.clip.onend = () => { if (screen === "carol" && C.stage === "listen") carolReveal(false); };
+  freshScene = true; render();
+  audio.music(null);
+  audio.play("timpani"); strobe("sweep", 2000);
+  await card(`<div class="round-card"><div class="rc-kicker">Carol ${C.i + 1} of ${C.deck.length}</div>
+    <div class="rc-coin note"><span>♪</span></div><div class="rc-title">Name That Carol!</div><div class="rc-sub">Buzz in as soon as you know it</div></div>`, "round", 2200);
+  if (screen !== "carol") return;
+  await C.clip.ready;
+  if (screen !== "carol") return;
+  C.stage = "listen"; render(); C.clip.play();
+}
+function carolBuzz(t, pid = null) {
+  if (C?.stage !== "listen" || C.locked.includes(t)) return;
+  C.clip.pause();
+  C.buzz = t; C.buzzPid = pid; C.stage = "answer";
+  audio.buzzer(t); strobe("flash", 700);
+  const who = pid ? roster.find(p => p.pid === pid)?.name : null;
+  card(`<div class="buzz-card t${t}"><div class="burst"></div><small>Buzzed in!</small><b>${esc(tName(t))}</b>${who ? `<em>${esc(who)}, name that carol!</em>` : ""}</div>`, "buzz", 1400);
+  render();
+  setTimer(15, () => carolJudge(false), true);
+}
+/* a typed/spoken title: correct only if this carol is the BEST match among all carols */
+function carolGuess(text, alts = []) {
+  if (C?.stage !== "answer" || !String(text).trim()) return;
+  const titles = CAROLS.map(c => [c.title, 1, c.aliases]);
+  const i = bestMatch(text, alts, titles, 0.8);       // titles need a strong match (O Come All Ye Faithful ≠ O Come Emmanuel)
+  C.said = text;
+  carolJudge(i >= 0 && CAROLS[i].id === carolNow().id);
+}
+function carolJudge(ok) {
+  if (C?.stage !== "answer") return;
+  stopClock();
+  const t = C.buzz, pid = C.buzzPid;
+  if (ok) {
+    const pts = C.clip.elapsed() <= CAROL_FAST ? 20 : 10;
+    C.scores[t] += pts;
+    if (pid && room) room.sendTo(pid, { t: "result", kind: "correct", answer: carolNow().title, pts });
+    return carolReveal(true, t, pts);
+  }
+  audio.wrong(); setTimeout(() => audio.play("gasp", { vol: 0.7 }), 500);
+  if (pid && room) room.sendTo(pid, { t: "result", kind: "wrong", text: C.said, strikes: 1, msg: "Not this carol!" });
+  C.locked.push(t); C.buzz = null; C.buzzPid = null;
+  if (C.locked.length >= 2) return carolReveal(false);
+  card(`<div class="banner-card hot"><small>Not quite!</small><b>${esc(tName(1 - t))}, your chance!</b></div>`, "banner", 1400)
+    .then(() => { if (screen === "carol" && C.stage === "answer") { C.stage = "listen"; render(); C.clip.play(); } });
+  C.stage = "answer";            // stays locked until the banner finishes
+  render();
+}
+function carolReveal(won, t = null, pts = 0) {
+  stopClock();
+  C.stage = "reveal"; C.result = { won, t, pts };
+  if (!C.clip.playing) C.clip.play();             // let the carol ring out under the reveal
+  if (won) { audio.play("applause", { vol: 0.8 }); setTimeout(() => audio.play("cheer", { vol: 0.5 }), 300); strobe("gold", 1800); confetti(90, { x: 0.5, y: 0.4 }); }
+  else audio.play("chime");
+  render();
+}
+function carolNext() {
+  if (C.stage !== "reveal") return;
+  C.clip?.stop();
+  if (C.i === C.deck.length - 1) {
+    const sc = C.scores, w = sc[0] === sc[1] ? null : sc[0] > sc[1] ? 0 : 1;
+    return go("results", { kind: "carol", winner: w, scores: sc, title: w === null ? "It's a TIE!" : `${tName(w)} wins!`, sub: "Name That Carol champions" });
+  }
+  C.i++; audio.play("whoosh"); carolRound();
+}
+function carolAct(a, v) {
+  if (a === "cBuzz") return carolBuzz(+v);
+  if (a === "cRight") return carolJudge(true);
+  if (a === "cWrong") return carolJudge(false);
+  if (a === "cReveal" && (C.stage === "listen" || C.stage === "answer")) { C.clip.pause(); return carolReveal(false); }
+  if (a === "cNext") return carolNext();
+  if (a === "listen") return listenTV();
+}
+function carolControls() {
+  if (!C) return [];
+  if (C.stage === "listen") return [{ a: "cBuzz", v: 0, label: `${tName(0)} buzzed`, kind: "t0" }, { a: "cBuzz", v: 1, label: `${tName(1)} buzzed`, kind: "t1" }, { a: "cReveal", label: "Reveal the title", kind: "ghost" }];
+  if (C.stage === "answer" && C.buzz !== null) return [{ a: "cRight", label: "✓ Correct", kind: "gold" }, { a: "cWrong", label: "✕ Wrong", kind: "x" }];
+  if (C.stage === "reveal") return [{ a: "cNext", label: C.i === C.deck.length - 1 ? "Final results ▶" : "Next carol ▶", kind: "gold", main: true }];
+  return [];
+}
+screens.carol = {
+  enter() { audio.music(null); },
+  render() {
+    const c = carolNow(), st = C.stage, rem = remoteOn(), res = C.result;
+    const eq = Array.from({ length: 24 }, (_, i) => `<i style="--i:${i}"></i>`).join("");
+    stage.innerHTML = `<div class="scene carol">
+      <div class="spot-l"></div><div class="spot-r"></div>
+      <header class="scorebar">${[0, 1].map(t => `<div class="pod t${t} ${C.buzz === t ? "lit" : ""} ${C.locked.includes(t) && st !== "reveal" ? "out" : ""}"><div class="pod-name">${esc(tName(t))}</div><div class="pod-score"><span>${C.scores[t]}</span></div></div>`).join(`<div class="bank-pod"><small>Carol</small><b>${C.i + 1}</b><em>of ${C.deck.length}</em></div>`)}</header>
+      <section class="carol-stage ${st}">
+        <div class="vinyl ${st === "listen" || st === "reveal" ? "spin" : ""}"><div class="label">♪</div></div>
+        <div class="eq ${st === "listen" || st === "reveal" ? "on" : ""}">${eq}</div>
+        <div class="notes"><span>♪</span><span>♫</span><span>♪</span><span>♬</span><span>♫</span></div>
+        ${st === "reveal" ? `<div class="carol-title"><small>${res?.won ? `${esc(tName(res.t))} +${res.pts}` : "The carol was"}</small><b>${esc(c.title)}</b></div>` : `<div class="carol-hint">${st === "answer" ? `<b>${esc(tName(C.buzz ?? 0))}</b>, name that carol!` : st === "listen" ? "Listen… buzz in when you know it!" : "Get ready…"}</div>`}
+      </section>
+      <footer class="lower-third"><div class="lt-left"><span class="lt-tag">${st === "answer" ? "ANSWER" : st === "reveal" ? "REVEAL" : "LISTEN"}</span><p>${st === "listen" ? `Phones: hit <b>BUZZ</b>! First ${CAROL_FAST} seconds = <b>20 points</b>` : st === "answer" ? "Type or say the carol's name" : st === "reveal" ? (res?.won ? "Correct!" : "Nobody got it this time.") : ""}</p></div>
+        <div class="lt-right"><div id="clockSlot">${timerHTML()}</div></div></footer>
+      <div class="host-dock wide">
+        ${st === "answer" ? `<form class="tv-answer" data-form="tvAnswer" autocomplete="off"><input id="tvAnswer" placeholder="Type the carol's name…" maxlength="60" spellcheck="false" enterkeyhint="go">
+          <button type="button" class="dbtn mic ${listening ? "on" : ""} ${SR ? "" : "nosr"}" data-act="act" data-v="listen:">${icon("mic")}</button><button class="dbtn gold" type="submit">Check</button></form>` : ""}
+        ${rem ? `<div class="remote-badge">${icon("key")} Host remote</div>` : `<span class="dock-label">HOST</span>${carolControls().map(x => `<button class="dbtn ${x.kind}" data-act="act" data-v="${x.a}:${x.v ?? ""}">${x.label}</button>`).join("")}`}
+      </div>
+      <button class="back-btn" data-act="home">${icon("home")}</button>
+    </div>`;
+  }
+};
 
 /* =========================================================
    CELEBRATION (win screen): bouncing gifts, ornaments, stars, coins
@@ -1084,6 +1241,7 @@ screens.results = {
   enter(r) {
     R = r; closeCard(true);
     audio.music("win", { then: "menu" }); audio.play("victory");
+    if (r.winner !== null && r.winner !== undefined || r.won) { setTimeout(() => audio.play("cheer", { vol: 0.6 }), 200); setTimeout(() => audio.play("applause", { vol: 0.6 }), 1200); strobe("party", 6000); }
     const champ = r.winner !== null && r.winner !== undefined;
     if (r.kind === "survey" && champ) { setTimeout(() => audio.voice("vo-winner"), 700); setTimeout(() => audio.voice("vo-congrats"), 3500); }
     else if (champ || r.won) setTimeout(() => audio.voice("vo-congrats"), 700);
@@ -1168,8 +1326,16 @@ function playerView(pid) {
     else if (G.stage === "choose") { status = me?.team === G.fo.winner ? "You won the face-off! Play or pass?" : `${tName(G.fo.winner)} won the face-off!`; if (me?.team === G.fo.winner) tone = "hot"; }
     else if (G.stage === "roundEnd" || G.stage === "award" || G.stage === "reveal") status = G.awardMsg;
   }
+  if (screen === "carol" && C) {
+    const mine = me && me.team !== null;
+    if (C.stage === "listen" && mine && !C.locked.includes(me.team)) { buzz = "ready"; status = "Name that carol! Buzz when you know it"; tone = "hot"; }
+    else if (C.stage === "listen") status = mine ? "Your team already guessed. Listen!" : "Listen!";
+    else if (C.stage === "answer") status = C.buzz === me?.team ? (C.buzzPid === pid || !C.buzzPid ? "You buzzed! What's the carol?" : `${roster.find(p => p.pid === C.buzzPid)?.name || "Your teammate"} is answering`) : `${tName(C.buzz ?? 0)} buzzed in!`;
+    else if (C.stage === "reveal") status = C.result?.won ? `${tName(C.result.t)} got it: ${carolNow().title}!` : `It was ${carolNow().title}`;
+  }
   if (screen === "results") status = R?.title || "Game over!";
-  const answer = screen === "survey" && G && me ? mayAnswer(me) : false;   // shows the type / mic box
+  let answer = screen === "survey" && G && me ? mayAnswer(me) : false;   // shows the type / mic box
+  if (screen === "carol" && C?.stage === "answer" && me && C.buzz === me.team && (!C.buzzPid || C.buzzPid === pid)) answer = true;
   const pp = screen === "survey" && G?.stage === "choose" && me?.team === G.fo.winner;
   let q = screen === "survey" && G ? G.round.q : "", mode = "survey", choices = null, answerNow = answer;
   if (screen === "fast" && F) {
@@ -1204,6 +1370,11 @@ function hostView() {
   if (screen === "arcade" && A) { const c = A.deck[A.i]; Object.assign(v, { q: c.q, prompt: `${tName(A.team)} answering`, choices: c.choices.map((t, i) => ({ t, ok: i === c.answer })), picked: A.picked, controls: A.picked === null ? c.choices.map((t, i) => ({ a: "arcPick", v: i, label: `${"ABCD"[i]}. ${t}${i === c.answer ? "  ★" : ""}`, kind: i === c.answer ? "ans ok" : "ans" })) : [{ a: "arcNext", label: "Next question ▶", kind: "gold" }] }); }
   if (screen === "results") v.controls = [{ a: "again", label: "Play again", kind: "gold" }, ...(R?.kind === "survey" ? [{ a: "fastFromResults", label: "Fast Money", kind: "red" }] : []), { a: "menu", label: "Menu", kind: "ghost" }];
   if (screen === "lobby") v.controls = [{ a: "startGameRemote", label: "Start the show ▶", kind: "gold" }];
+  if (screen === "carol" && C) Object.assign(v, { prompt: `Now playing (only you can see): ${carolNow().title}`, controls: carolControls() });
+  if (screen === "fast" && F && (F.phase === "rev1" || F.phase === "rev2")) {
+    const p = F.phase === "rev1" ? 0 : 1;
+    v.fmFixRows = F.qs.slice(0, F.shown[p]).map((q, qi) => ({ p, q: qi, question: q.q, said: F.fixed?.[`${p}.${qi}`] ?? F.ans[p][qi] ?? "", pick: F.pick[p][qi], options: q.a.map(([t, pts], i) => ({ i, label: `${t} · ${pts}` })) }));
+  }
   return v;
 }
 /* ================= misc ================= */
