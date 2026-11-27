@@ -5,9 +5,9 @@
 const SFX = ["click","reveal","top","strike","timeup","timpani","transition","coin","win","victory","steal","levelup","page","magic","whoosh","star","right","oops","pop","gong","nope","countdown","incorrect","chime","ooh","buzzer","clock","press","hover"];
 const VO = ["vo-survey-says","vo-top-answer","vo-steal","vo-fast-money","vo-winner","vo-round","vo-welcome","vo-congrats","vo-great","vo-better-luck","vo-try-again",
   "vo-lobby","vo-faceoff","vo-buzzed","vo-play-or-pass","vo-strike1","vo-strike2","vo-strike3","vo-board-cleared","vo-steal-success","vo-final-round","vo-next-round","vo-times-up","vo-fm-reveal","vo-duplicate",
-  "vo-turn-bethlehem","vo-turn-nazareth","vo-next-question","vo-fm-player1","vo-fm-player2","vo-wrong"];   // optional: play when the file exists
+  "vo-turn-bethlehem","vo-turn-nazareth","vo-next-question","vo-fm-player1","vo-fm-player2","vo-wrong","vo-need-200","vo-top-was","vo-well-tried"];   // optional: play when the file exists
 // music files are loudness-normalized to -16 LUFS, so these are true relative levels
-const MUSIC_VOL = { menu: 0.42, theme: 0.4, lobby: 0.34, game: 0.3, round: 0.3, win: 0.5, fastmoney: 0.32 };
+const MUSIC_VOL = { menu: 0.42, theme: 0.4, lobby: 0.34, game: 0.38, round: 0.3, win: 0.5, fastmoney: 0.32 };
 const MUSIC_FILE = { fastmoney: "round" };   // Fast Money reuses the drum loop
 
 let ctx = null, master, sfxBus, musicBus;
@@ -103,8 +103,9 @@ export const audio = {
 
   // Exactly ONE music track at a time. Each request gets a generation number; a track that
   // finishes loading after a newer request is discarded, and the old track fades out.
-  music(track) {
-    if (musicTrack === track && (musicNode || synthTimer || loadingGen === musicGen)) return;
+  music(track, { restart = false } = {}) {
+    if (!restart && musicTrack === track && (musicNode || synthTimer || loadingGen === musicGen)) return;
+    if (restart && musicTrack === track && musicNode && musicNode.src.loop) return;   // already looping: keep it
     stopMusic();
     musicTrack = track;
     const gen = ++musicGen;

@@ -620,3 +620,10 @@ body.portrait-phone:not([data-screen="cover"]) #rotate-hint{display:flex}
 .pod-score span{font-size:66px}
 .pod-roster{align-self:center}
 .pod.lit{transform:scale(1.03)}
+
+/* player 2 missed the #1 answer: show what it was */
+.fm-cell{position:relative;overflow:visible}
+.fm-cell .top-was{position:absolute;left:10px;right:auto;bottom:-15px;padding:2px 12px;border-radius:999px;font:900 15px Inter;font-style:normal;white-space:nowrap;color:#3d2400;background:var(--metal);box-shadow:0 0 14px #ffe7a3,0 4px 10px #0008;z-index:3;animation:popIn .5s cubic-bezier(.2,1.8,.4,1) both}
+
+.fm-cell .top-was{left:auto;right:112px;bottom:auto;top:50%;transform:translateY(-50%);font-size:19px;padding:6px 14px;animation:wasIn .5s cubic-bezier(.2,1.6,.4,1) both}
+@keyframes wasIn{from{opacity:0;transform:translateY(-50%) scale(.4)}to{opacity:1;transform:translateY(-50%)}}

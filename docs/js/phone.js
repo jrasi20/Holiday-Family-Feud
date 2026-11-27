@@ -84,7 +84,9 @@ function renderPlayer() {
   const s = state || {};
   const team = s.team, teams = s.teams || ["", ""];
   // keep whatever the player is typing across live updates
-  const prevBox = $("#ans"), typed = prevBox?.value || "", hadFocus = document.activeElement === prevBox;
+  const prevBox = $("#ans"), keep = prevBox && !sent && renderedQ === s.q;
+  const typed = keep ? prevBox.value : "", hadFocus = document.activeElement === prevBox;
+  renderedQ = s.q;
   app.className = `screen player ${team === 0 ? "t0" : team === 1 ? "t1" : ""} tone-${s.tone || "idle"}`;
   if (s.answer) return renderAnswer(s, teams, typed, hadFocus);
   if (s.mode === "arcade" && s.choices) return renderChoices(s, teams);
@@ -106,7 +108,7 @@ function renderPlayer() {
 
 /* ---------- answering: type it or say it ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let sent = false, listening = false, recog = null;
+let sent = false, listening = false, recog = null, renderedQ = null;
 function renderAnswer(s, teams, typed, hadFocus) {
   app.innerHTML = `
     <header class="p-top"><div class="me"><small>${esc(teams[s.team] || "")}</small><b>${esc(s.name || "")}</b></div>
@@ -130,6 +132,7 @@ function sendAnswer(text, alts = []) {
   text = String(text || "").trim();
   if (!text || sent) return;
   unlock();
+  const box = $("#ans"); if (box) box.value = "";
   if (client.send({ t: "answer", text, alts })) { sent = true; vib(40); beep(520, 780, 0.12, "triangle", 0.1); render(); }
 }
 function toggleMic() {
