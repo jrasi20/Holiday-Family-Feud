@@ -26,6 +26,7 @@ const load = async (url) => {
 
 export const audio = {
   get ready() { return !!ctx; },
+  get musicLevel() { return musicBus ? +musicBus.gain.value.toFixed(3) : null; },   // for testing
   setSfx(v) { sfxOn = v; },
   setMusic(v) { musicOn = v; if (!v) { stopMusic(); musicGen++; } else if (musicTrack) { const t = musicTrack; musicTrack = null; this.music(t); } },
 
@@ -103,7 +104,7 @@ export const audio = {
 
   // Exactly ONE music track at a time. Each request gets a generation number; a track that
   // finishes loading after a newer request is discarded, and the old track fades out.
-  music(track, { restart = false } = {}) {
+  music(track, { restart = false, then = null } = {}) {
     if (!restart && musicTrack === track && (musicNode || synthTimer || loadingGen === musicGen)) return;
     if (restart && musicTrack === track && musicNode && musicNode.src.loop) return;   // already looping: keep it
     stopMusic();
@@ -120,6 +121,7 @@ export const audio = {
         g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(v, now + 0.8);   // fade in
         src.connect(g).connect(musicBus); src.start();
         musicNode = { src, g };
+        if (!src.loop && then) src.onended = () => { if (gen === musicGen) { musicTrack = null; this.music(then); } };
       } else startSynth(track);
     };
     loadingGen = gen;
@@ -139,12 +141,16 @@ function stopMusic() {
   }
   if (synthTimer) { clearInterval(synthTimer); synthTimer = null; }
 }
+const MUSIC_BUS = 1;          // the music bus always returns to this level
+let duckUntil = 0;
 function duck(to, secs) {
   if (!ctx) return;
-  const g = musicBus.gain, now = ctx.currentTime, v = g.value;
-  g.cancelScheduledValues(now); g.setValueAtTime(v, now);
-  g.linearRampToValueAtTime(v * to, now + 0.12);
-  g.linearRampToValueAtTime(v, now + secs);
+  const g = musicBus.gain, now = ctx.currentTime;
+  duckUntil = Math.max(duckUntil, now + secs);            // overlapping lines extend the dip, never deepen it
+  g.cancelScheduledValues(now); g.setValueAtTime(g.value, now);
+  g.linearRampToValueAtTime(MUSIC_BUS * to, now + 0.12);
+  g.setValueAtTime(MUSIC_BUS * to, duckUntil - 0.25);
+  g.linearRampToValueAtTime(MUSIC_BUS, duckUntil);
 }
 function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch {} }
 

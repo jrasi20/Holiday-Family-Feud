@@ -1,7 +1,7 @@
 // Forgiving answer checker for typed or spoken answers:
 // "wisemen", "the magi", "sheperds", "frankinsence", "silent nite" all count.
 
-const STOP = new Set(["the","a","an","of","to","in","on","and","or","is","it","its","his","her","their","my","at","for","with","be","was","were","they","he","she","did","got","some","from","um","uh","like","maybe","i","think","say","answer","would","be"]);
+const STOP = new Set(["christmas","xmas","holiday","holidays","eve","day","time","thing","things","something","stuff","people","person","family","kid","kids","really","very","just","probably","could","lot","lots","get","go","goes","make","makes","take","put","do","does","you","your","we","our","me","us","them","this","that","there","when","what","who","all","any","one","out","up","into","over","then","so","because","with","would","the","a","an","of","to","in","on","and","or","is","it","its","his","her","their","my","at","for","with","be","was","were","they","he","she","did","got","some","from","um","uh","like","maybe","i","think","say","answer","would","be"]);
 const NUM = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10" };
 
 export function norm(s) {
@@ -33,8 +33,8 @@ function lev(a, b) {
 const close = (a, b) => {
   if (a === b) return true;
   const L = Math.max(a.length, b.length);
-  if (L < 4) return false;
-  return lev(a, b) <= (L >= 7 ? 2 : 1);
+  if (L <= 4) return false;                 // short words: exact only
+  return lev(a, b) <= (L >= 8 ? 2 : 1);
 };
 const variants = ([text, , aliases = []]) => [...text.split("/"), ...aliases].map(v => v.trim()).filter(Boolean);
 
@@ -43,12 +43,14 @@ function score(guess, variant) {
   if (!g || !v) return 0;
   if (g === v || g.replace(/ /g, "") === v.replace(/ /g, "")) return 1;
   if (close(g.replace(/ /g, ""), v.replace(/ /g, ""))) return 0.95;
-  if (g.length >= 4 && (v.includes(g) || g.includes(v))) return 0.85;
   const gt = tokens(g), vt = tokens(v).filter(w => w.length >= 3);
+  const rambling = gt.length > vt.length + 3;
+  if (!rambling && g.length >= 4 && v.length >= 4 && (v.includes(g) || g.includes(v))) return 0.85;
   if (!gt.length || !vt.length) return 0;
-  const hits = vt.filter(w => gt.some(x => close(x, w) || (w.length >= 3 && x === w))).length;
-  if (!hits) return 0;
-  return 0.5 + 0.3 * (hits / vt.length);
+  const hits = vt.filter(w => gt.some(x => close(x, w) || x === w)).length;
+  const ratio = hits / vt.length;
+  if (!hits || ratio < 0.5 || (rambling && ratio < 1)) return 0;
+  return 0.5 + 0.3 * ratio;
 }
 
 /* sound-alike code, for words the speech engine mishears ("stalking" ≈ "stocking") */

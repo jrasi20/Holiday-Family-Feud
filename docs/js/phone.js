@@ -90,6 +90,14 @@ function renderPlayer() {
   app.className = `screen player ${team === 0 ? "t0" : team === 1 ? "t1" : ""} tone-${s.tone || "idle"}`;
   if (s.answer) return renderAnswer(s, teams, typed, hadFocus);
   if (s.mode === "arcade" && s.choices) return renderChoices(s, teams);
+  if (s.pp) {
+    app.innerHTML = `<header class="p-top"><div class="me"><small>${esc(teams[s.team] || "")}</small><b>${esc(s.name || "")}</b></div></header>
+      <p class="status">${esc(s.status)}</p>${s.q ? `<div class="ans-q small-q">${esc(s.q)}</div>` : ""}
+      <div class="pp-phone"><button class="pp-btn play" data-v="play">PLAY</button><button class="pp-btn pass" data-v="pass">PASS</button></div>
+      <footer class="p-foot">${linkLine()}</footer>`;
+    app.querySelectorAll(".pp-btn").forEach(b => b.onclick = () => { unlock(); vib(50); client.send({ t: "choose", v: b.dataset.v }); app.querySelectorAll(".pp-btn").forEach(x => x.disabled = true); b.classList.add("chosen"); });
+    return;
+  }
   const btn = s.buzz === "ready" ? `<button class="buzzer live" id="bz"><span>BUZZ!</span></button>`
     : s.buzz === "won" ? `<div class="buzzer won"><span>FIRST!</span></div>`
     : s.buzz === "lost" ? `<div class="buzzer lost"><span>Too slow</span></div>`
@@ -140,10 +148,12 @@ function toggleMic() {
   if (!SR) { toast("Voice answers work in Chrome (Android) or Safari (iPhone). Please type your answer!"); return; }
   if (listening) { try { recog?.stop(); } catch {} return; }
   recog = new SR(); recog.lang = "en-US"; recog.interimResults = true; recog.maxAlternatives = 3;
+  let done = false;
   recog.onresult = ev => {
+    if (done) return;
     const r = ev.results[ev.results.length - 1], text = r[0].transcript;
     const box = $("#ans"); if (box) box.value = text;
-    if (r.isFinal) { listening = false; sendAnswer(text, [...r].slice(1).map(x => x.transcript)); }
+    if (r.isFinal) { done = true; listening = false; try { recog.stop(); } catch {} sendAnswer(text, [...r].slice(1).map(x => x.transcript)); }
   };
   recog.onend = () => { listening = false; render(); };
   recog.onerror = e => { listening = false; if (e.error === "not-allowed") alert("Please allow the microphone, or type your answer."); render(); };

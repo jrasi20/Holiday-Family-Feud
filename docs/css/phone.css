@@ -132,3 +132,12 @@ input:focus{border-color:var(--gold)}
 .mic-btn.nosr{opacity:.6}
 .toast{position:fixed;left:16px;right:16px;bottom:max(24px,env(safe-area-inset-bottom));z-index:60;padding:16px;border-radius:16px;background:#111a33f2;border:2px solid var(--gold);font-weight:700;text-align:center;animation:pop .3s both}
 .toast.out{animation:resOut .4s both}
+
+/* play / pass on the face-off winner phone */
+.pp-phone{display:flex;flex-direction:column;gap:14px;margin:auto 0}
+.pp-btn{min-height:110px;border-radius:24px;font:900 44px Cinzel,serif;box-shadow:0 10px 0 #0007,0 20px 40px #000a;animation:pop .4s both}
+.pp-btn.play{color:#3d2400;background:linear-gradient(180deg,#fff1b8,#f0b840 60%,#c38420)}
+.pp-btn.pass{color:#fff;background:linear-gradient(180deg,#ff6672,#d42a3c 45%,#7a0f1c)}
+.pp-btn:active{transform:translateY(6px)}
+.pp-btn.chosen{outline:4px solid #fff}
+.pp-btn:disabled:not(.chosen){opacity:.4}

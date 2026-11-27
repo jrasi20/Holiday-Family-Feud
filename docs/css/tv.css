@@ -627,3 +627,21 @@ body.portrait-phone:not([data-screen="cover"]) #rotate-hint{display:flex}
 
 .fm-cell .top-was{left:auto;right:112px;bottom:auto;top:50%;transform:translateY(-50%);font-size:19px;padding:6px 14px;animation:wasIn .5s cubic-bezier(.2,1.6,.4,1) both}
 @keyframes wasIn{from{opacity:0;transform:translateY(-50%) scale(.4)}to{opacity:1;transform:translateY(-50%)}}
+
+/* ---------- v10 ---------- */
+/* long questions shrink to stay inside the bar */
+.qbar h2.long{font-size:30px;line-height:1.12}
+.qbar{overflow:hidden;padding:0 30px}
+/* buzzed-in flag sits inside the team panel (no longer covers the question bar) */
+.buzz-flag{left:auto;right:206px;bottom:8px;transform:none;animation:flagPop .5s cubic-bezier(.2,1.8,.4,1) both, flagGlow 1s .5s ease-in-out infinite alternate}
+@keyframes flagPop{from{transform:scale(0)}to{transform:none}}
+/* long spoken answers wrap */
+.said-bubble.long{white-space:normal;max-width:1150px;text-align:center}
+.said-bubble.long b{font-size:42px;line-height:1.15}
+/* Fast Money: top answer on its own line under player 2's answer */
+.fm-cell .top-was{display:none}
+.fm-cell span{display:flex;flex-direction:column;justify-content:center;line-height:1.05;min-width:0}
+.fm-cell .was-line{font:800 16px Inter;text-transform:none;color:#8a1220;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:fadeIn .5s both}
+.fm-cell.has-was span{font-size:26px}
+.fm-chase{font-size:28px;color:var(--gold2);font-weight:700}
+.fm-chase b{font:700 36px Oswald;color:#fff}

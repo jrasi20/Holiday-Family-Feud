@@ -212,6 +212,11 @@ function onPhone(m, pid) {
     if (me && fmMayAnswer(me)) fmSubmit(String(m.text || "").slice(0, 60), me, (m.alts || []).slice(0, 4).map(String));
     return;
   }
+  if (m.t === "choose" && screen === "survey" && G?.stage === "choose") {
+    const me = roster.find(p => p.pid === pid);
+    if (me && me.team === G.fo.winner) choose(m.v === "pass" ? "pass" : "play");
+    return;
+  }
   if (m.t === "pick" && screen === "arcade" && A) {
     const me = roster.find(p => p.pid === pid);
     if (me && me.team === A.team && A.picked === null) { A.by = me.name; arcadeAct("arcPick", m.i); }
@@ -590,10 +595,12 @@ function listenTV() {
   if (!ok) return;
   if (listening) { try { recog?.stop(); } catch {} return; }
   recog = new SR(); recog.lang = "en-US"; recog.interimResults = true; recog.maxAlternatives = 3;
+  let done = false;
   recog.onresult = ev => {
+    if (done) return;
     const r = ev.results[ev.results.length - 1], text = r[0].transcript;
     const box = document.getElementById("tvAnswer"); if (box) box.value = text;
-    if (r.isFinal) { listening = false; tvSubmit(text, [...r].slice(1).map(x => x.transcript)); }
+    if (r.isFinal) { done = true; listening = false; try { recog.stop(); } catch {} tvSubmit(text, [...r].slice(1).map(x => x.transcript)); }
   };
   recog.onend = () => { listening = false; if (screen === "survey" || screen === "fast") render(); };
   recog.onerror = () => { listening = false; };
@@ -703,7 +710,7 @@ function showNextCard() {
   const last = G.ri === G.deck.length - 1;
   card(`<div class="next-card"><small>${last ? "That's the game!" : `Round ${G.ri + 1} complete`}</small>
     <div class="nc-scores"><span class="t0">${esc(tName(0))}<b>${G.scores[0]}</b></span><span class="t1">${esc(tName(1))}<b>${G.scores[1]}</b></span></div>
-    <b>${last ? "Final results…" : `Round ${G.ri + 2} coming up!`}</b>${(audio.voice("vo-next-round"), "")}<div class="nc-bar"></div></div>`, "next", 4200);
+    <b>${last ? "Final results…" : `Round ${G.ri + 2} coming up!`}</b>${(last ? "" : audio.voice("vo-next-round"), "")}<div class="nc-bar"></div></div>`, "next", 4200);
   G._auto = setTimeout(() => nextRound(), 4300);
 }
 
@@ -727,7 +734,7 @@ function prompt() {
   if (st === "faceoff") { const p = [faceoffPlayer(0), faceoffPlayer(1)]; return `FACE-OFF · ${p[0] ? esc(p[0].name) : esc(tName(0))} vs ${p[1] ? esc(p[1].name) : esc(tName(1))} · buzz in!`; }
   if (st === "faceoffAnswer") {
     const t = G.fo.order[G.fo.step]; const p = G.fo.step === 0 && G.fo.buzzPid ? roster.find(x => x.pid === G.fo.buzzPid) : faceoffPlayer(t);
-    return G.fo.step === 0 ? `<b>${esc(p?.name || tName(t))}</b> buzzed in first! Give us your answer.` : `<b>${esc(p?.name || tName(t))}</b> (${esc(tName(t))}), beat that answer!`;
+    return G.fo.step === 0 ? `<b>${esc(p?.name || tName(t))}</b> buzzed in first! Give us your answer.` : (p?.name ? `<b>${esc(p.name)}</b> (${esc(tName(t))}), beat that answer!` : `<b>${esc(tName(t))}</b>, can you beat that answer?`);
   }
   if (st === "choose") return `<b>${esc(tName(G.fo.winner))}</b>: play or pass?`;
   if (st === "play") { const p = turnPlayer(G.control); return p ? `<b>${esc(p.name)}</b>, it's your turn. Give us an answer!` : `Next player on <b>${esc(tName(G.control))}</b>, give us an answer!`; }
@@ -752,7 +759,7 @@ function renderSurvey() {
         <div class="pod-roster">${teamRoster(t).map(p => `<i class="${(G.stage === "play" && G.control === t && turnPlayer(t)?.pid === p.pid) ? "on" : ""}">${esc(p.name)}</i>`).join("")}</div>
       </div>`).join(`<div class="bank-pod"><small>Round ${G.ri + 1}/${G.deck.length}</small><b id="bank">${G.shown.bank}</b><em>×${G.mult}</em></div>`)}
     </header>
-    <section class="qbar"><span>${r.category === "Bible" ? "Bible Board" : "Holiday Board"} · ${esc(r.ref)}</span><h2>${esc(r.q)}</h2></section>
+    <section class="qbar"><span>${r.category === "Bible" ? "Bible Board" : "Holiday Board"} · ${esc(r.ref)}</span><h2 class="${r.q.length > 44 ? "long" : ""}">${esc(r.q)}</h2></section>
     <section class="board-shell">
       <div class="board-chrome"><div class="marquee"></div>
         <div class="board ${G.pending ? "suspense" : ""}">
@@ -765,7 +772,7 @@ function renderSurvey() {
         </div>
       </div>
     </section>
-    ${G.said ? `<div class="said-bubble t${G.said.team}"><small>${esc(G.said.name)} says</small><b>“${esc(G.said.text)}”</b></div>` : ""}
+    ${G.said ? `<div class="said-bubble t${G.said.team} ${G.said.text.length > 24 ? "long" : ""}"><small>${esc(G.said.name)} says</small><b>“${esc(G.said.text)}”</b></div>` : ""}
     <footer class="lower-third">
       <div class="lt-left"><span class="lt-tag">${G.stage === "steal" ? "STEAL" : G.stage === "faceoff" || G.stage === "faceoffAnswer" ? "FACE-OFF" : G.stage === "play" ? esc(tName(G.control)) + "'s turn" : "ROUND " + (G.ri + 1)}</span><p>${prompt()}</p></div>
         ${G.msg ? `<div class="flash-pill ${/Strike|Time|Already|Nobody/.test(G.msg) ? "bad" : "good"}" key="${esc(G.msg)}">${esc(G.msg)}</div>` : ""}
@@ -836,12 +843,13 @@ screens.fast = {
       ${[0, 1].map(p => {
         const shown = qi < F.shown[p], ix = F.pick[p][qi], said = F.ans[p][qi];
         if (!shown) return `<div class="fm-cell blank"></div>`;
-        const was = p === 1 && F.topWas?.includes(qi) ? `<em class="top-was">Top answer: ${esc(q.a[0][0])} · ${q.a[0][1]}</em>` : "";
-        return `<div class="fm-cell ${ix >= 0 ? "hit" : "miss"} ${ix === 0 ? "top" : ""} flip"><span>${esc(said || "(pass)")}</span><b>${ix >= 0 ? q.a[ix][1] : 0}</b>${was}</div>`;
+        const was = p === 1 && F.topWas?.includes(qi) ? `<small class="was-line">Top answer: ${esc(q.a[0][0])} · ${q.a[0][1]}</small>` : "";
+        return `<div class="fm-cell ${ix >= 0 ? "hit" : "miss"} ${ix === 0 ? "top" : ""} ${was ? "has-was" : ""} flip"><span>${esc(said || "(pass)")}${was}</span><b>${ix >= 0 ? q.a[ix][1] : 0}</b></div>`;
       }).join("")}${F.tops ? (qi < F.tops ? `<div class="fm-cell topans flip"><span>${esc(q.a[0][0])}</span><b>${q.a[0][1]}</b></div>` : `<div class="fm-cell blank"></div>`) : ""}</div>`).join("");
     let center = "";
     if (ph === "intro") center = `<div class="fm-intro"><h1>FAST <span>MONEY</span></h1><p>Two players · five questions · type or say your answers · reach <b>200</b> together!</p>
-      <div class="fm-team">${[0, 1].map(t => `<button class="${F.team === t ? "on" : ""} t${t}" data-act="act" data-v="fmTeam:${t}">${esc(tName(t))}</button>`).join("")}</div>
+      ${F.prev ? `<p class="fm-chase">${esc(tName(F.prev.team))} scored <b>${F.prev.total}</b>. ${esc(tName(F.team))}: reach 200 to win, or beat ${F.prev.total}!</p>`
+        : `<div class="fm-team">${[0, 1].map(t => `<button class="${F.team === t ? "on" : ""} t${t}" data-act="act" data-v="fmTeam:${t}">${esc(tName(t))}</button>`).join("")}</div>`}
       <div class="fm-who"><span>1 · ${esc(fmPlayer(0))} <em>20 sec</em></span><span>2 · ${esc(fmPlayer(1))} <em>25 sec</em></span></div>
       <p class="small">${esc(fmPlayer(1))}: leave the room (or cover your ears) until it's your turn!</p></div>`;
     else if (fmLive()) center = `<div class="fm-live"><div class="fm-clock" id="clockSlot">${timerHTML()}</div>
@@ -878,9 +886,11 @@ function fmControls() {
     }
     if (F.shown[p] < 5) return [{ a: "fmReveal", label: `Reveal answer ${F.shown[p] + 1} ▶`, kind: "gold", main: true }, ...out];
     if (ph === "rev1") return [{ a: "fmStart", v: 1, label: `Bring in ${fmPlayer(1)}: 25 seconds`, kind: "red", main: true }, ...out];
-    return [...(F.tops < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : []), { a: "fmDone", label: "Final result ▶", kind: "gold", main: true }, ...out];
+    const tops = (F.tops || 0) < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : [];
+    if (!F.prev) return [...tops, { a: "fmNextTeam", label: `${tName(1 - F.team)}'s turn ▶`, kind: "gold", main: true }, ...out];
+    return [...tops, { a: "fmDone", label: "Final result ▶", kind: "gold", main: true }, ...out];
   }
-  if (ph === "final") return [...(F.tops < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : []), { a: "fmDone", label: "Back to the celebration ▶", kind: "gold", main: true }];
+  if (ph === "final") return [...((F.tops || 0) < 5 ? [{ a: "fmTops", label: "Reveal the top answers", kind: "ghost" }] : []), { a: "fmDone", label: "Back to the celebration ▶", kind: "gold", main: true }];
   return [];
 }
 /* a typed / spoken answer for the current Fast Money question */
@@ -956,9 +966,24 @@ function fastAct(a, v) {
     return;
   }
   if (a === "fmDone") return fmFinish();
+  if (a === "fmNextTeam" && !F.prev) {
+    const prev = { team: F.team, total: fmTotal() };
+    clearTimeout(F._go);
+    F = { team: 1 - prev.team, prev, qs: freshPick(FAST_MONEY_BANK, "fm-recent", 5, x => x.q), phase: "intro", qi: 0, ans: [[], []], pick: [[], []], shown: [0, 0], shownTotal: 0, queue: [] };
+    audio.play("whoosh"); freshScene = true; render();
+    card(`<div class="banner-card t${F.team}"><small>${esc(tName(prev.team))} scored ${prev.total}</small><b>${esc(tName(F.team))}'s turn!</b></div>`, "banner", 2200);
+    setTimeout(() => turnVoice(F.team), 900);
+  }
 }
 function fmFinish() {
   const total = fmTotal(), won = total >= 200;
+  if (F.prev) {                                   // both teams played: 200 wins, otherwise closest to 200
+    const t = [0, 0]; t[F.prev.team] = F.prev.total; t[F.team] = total;
+    const w = won ? F.team : t[0] === t[1] ? null : t[0] > t[1] ? 0 : 1;
+    return go("results", { kind: "fast", fmTeams: t, winner: w, won, scores: [Math.max(...t)],
+      title: won ? `${tName(F.team)} WIN!` : w === null ? "It's a TIE!" : `${tName(w)} wins!`,
+      sub: won ? "Fast Money: 200 reached!" : "Nobody hit 200. Closest team wins!" });
+  }
   go("results", { kind: "fast", winner: won ? 0 : null, won, scores: [total], title: won ? "FAST MONEY WIN!" : `${total} points!`, sub: won ? `${tName(F.team)} beat 200!` : total > 150 ? "So close! Run it back!" : total >= 90 ? "Nice try! Play again to reach 200" : "Better luck next time!" });
 }
 function fmAdvance() { if (!F.queue.length) return fmEnd(true); F.qi = F.queue.shift(); render(); }
@@ -1058,7 +1083,7 @@ let R = null;
 screens.results = {
   enter(r) {
     R = r; closeCard(true);
-    audio.music("win"); audio.play("victory");
+    audio.music("win", { then: "menu" }); audio.play("victory");
     const champ = r.winner !== null && r.winner !== undefined;
     if (r.kind === "survey" && champ) { setTimeout(() => audio.voice("vo-winner"), 700); setTimeout(() => audio.voice("vo-congrats"), 3500); }
     else if (champ || r.won) setTimeout(() => audio.voice("vo-congrats"), 700);
@@ -1073,7 +1098,8 @@ screens.results = {
       ${celebration()}
       <h1 class="res-title">${[...R.title].map((ch, i) => ch === " " ? "<span class=sp> </span>" : `<span style="--i:${i}">${esc(ch)}</span>`).join("")}</h1>
       <p class="res-sub">${esc(R.sub)}</p>
-      ${R.kind === "fast" ? `<div class="res-pod solo ${R.won ? "champ" : ""}"><span>Fast Money total</span><b>${R.scores[0]}</b></div>` : `<div class="res-pods">${pods}</div>`}
+      ${R.kind === "fast" && R.fmTeams ? `<div class="res-pods">${[0, 1].map(t => `<div class="res-pod t${t} ${R.winner === t ? "champ" : ""}">${R.winner === t ? icon("crown") : ""}<span>${esc(tName(t))}</span><b>${R.fmTeams[t]}</b></div>`).join("")}</div>`
+        : R.kind === "fast" ? `<div class="res-pod solo ${R.won ? "champ" : ""}"><span>Fast Money total</span><b>${R.scores[0]}</b></div>` : `<div class="res-pods">${pods}</div>`}
       ${R.history?.length ? `<div class="res-rounds">${R.history.map(h => `<span class="t${h.team}"><em>R${h.round}${h.mult > 1 ? ` ×${h.mult}` : ""}</em>${esc(tName(h.team))} +${h.pts}${h.stolen ? " (steal)" : ""}</span>`).join("")}
         ${R.mvp ? `<span class="mvp">${icon("star")} MVP: ${esc(R.mvp.name)} · ${R.mvp.pts} pts</span>` : ""}</div>` : ""}
       <div class="res-actions">
@@ -1139,11 +1165,12 @@ function playerView(pid) {
       if (tp?.pid === pid) { status = "YOUR TURN! Type or say an answer"; tone = "hot"; }
       else status = me?.team === G.control ? `${tp?.name || "Your teammate"} is answering. Help them out!` : `${tName(G.control)} is playing.`;
     } else if (G.stage === "steal") { status = me?.team === 1 - G.control ? "STEAL! Huddle up. First answer sent counts!" : `${tName(1 - G.control)} is trying to steal!`; if (me?.team === 1 - G.control) tone = "hot"; }
-    else if (G.stage === "choose") status = `${tName(G.fo.winner)} won the face-off!`;
+    else if (G.stage === "choose") { status = me?.team === G.fo.winner ? "You won the face-off! Play or pass?" : `${tName(G.fo.winner)} won the face-off!`; if (me?.team === G.fo.winner) tone = "hot"; }
     else if (G.stage === "roundEnd" || G.stage === "award" || G.stage === "reveal") status = G.awardMsg;
   }
   if (screen === "results") status = R?.title || "Game over!";
   const answer = screen === "survey" && G && me ? mayAnswer(me) : false;   // shows the type / mic box
+  const pp = screen === "survey" && G?.stage === "choose" && me?.team === G.fo.winner;
   let q = screen === "survey" && G ? G.round.q : "", mode = "survey", choices = null, answerNow = answer;
   if (screen === "fast" && F) {
     mode = "fast";
@@ -1163,7 +1190,7 @@ function playerView(pid) {
     answerNow = false;
     if (!mine && A.picked === null) choices = choices.map(ch => ({ ...ch, state: "locked" }));
   }
-  return { ...base, status, buzz, tone, answer: answerNow, mode, choices, pending: !!G?.pending && screen === "survey", q };
+  return { ...base, status, buzz, tone, answer: answerNow, mode, choices, pp, pending: !!G?.pending && screen === "survey", q };
 }
 function hostView() {
   const v = { screen, teams: [tName(0), tName(1)] };
